@@ -823,6 +823,7 @@ mod tests {
             nodes: std::sync::Arc::new(NodeStorage::Owned(nodes)),
             string_pool: std::sync::Arc::new(pool),
             dir_counts: std::sync::Arc::new(dir_counts),
+            extensions: crate::extensions::ExtensionStore::default(),
         }
     }
 
@@ -925,6 +926,7 @@ mod tests {
     fn test_rebuild_flat_rows_empty() {
         let pool = StringPool::new();
         let snapshot = FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(NodeStorage::Owned(vec![])),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(vec![]),
@@ -948,6 +950,7 @@ mod tests {
         ];
 
         let snapshot = FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(vec![]),
@@ -988,6 +991,7 @@ mod tests {
         ];
 
         let snapshot = FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(vec![]),
@@ -1110,6 +1114,7 @@ mod tests {
         ];
 
         let snapshot = FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(vec![]),

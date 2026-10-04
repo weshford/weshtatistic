@@ -178,3 +178,59 @@ fn test_to_without_scan_path_errors() -> Result<(), Box<dyn std::error::Error>> 
     let _ = std::fs::remove_dir_all(&temp_dir);
     Ok(())
 }
+
+/// `--no-docker` is accepted by the CLI (clap plumbing): the benchmark path
+/// still fails on the missing path, proving the flag parsed rather than
+/// clap rejecting an unknown argument.
+#[test]
+fn test_no_docker_flag_is_accepted() -> Result<(), Box<dyn std::error::Error>> {
+    let output = edirstat_cli()
+        .arg("--benchmark")
+        .arg("--no-docker")
+        .output()?;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("path must be provided"),
+        "unexpected stderr: {stderr}"
+    );
+    Ok(())
+}
+
+/// `--no-docker --to` saves a snapshot without the Docker extension — even on
+/// hosts where Docker is present, so this assertion is machine-independent.
+#[test]
+fn test_to_with_no_docker_skips_docker_extension() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = fresh_temp_dir("test_cli_to_no_docker")?;
+    let scan_dir = temp_dir.join("scan_input");
+    std::fs::create_dir_all(&scan_dir)?;
+    std::fs::write(scan_dir.join("known_file.txt"), b"known contents")?;
+    let dest = temp_dir.join("snapshot_out");
+
+    let output = edirstat_cli()
+        .arg("--to")
+        .arg(&dest)
+        .arg("--no-docker")
+        .arg(&scan_dir)
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let snapshot_path = temp_dir.join("snapshot_out.edst.zst");
+    let loaded = edirstat::snapshot::load_snapshot_full(&snapshot_path)?;
+    assert!(
+        loaded
+            .extensions
+            .get(edirstat::extensions::EXT_DOCKER_INVENTORY)
+            .is_none(),
+        "--no-docker must not attach a Docker inventory"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    Ok(())
+}

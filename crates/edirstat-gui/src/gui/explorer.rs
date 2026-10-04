@@ -18,9 +18,15 @@ use crate::{
 };
 
 /// Resolves the primary icon badge and localized tooltip for a file node.
+///
+/// `docker` optionally classifies the node's full path against the probed
+/// Docker environment (data roots, VM disks, and their direct
+/// overlay2/volumes/containers/buildkit children).
 #[must_use]
 pub(crate) fn node_badge(
     node: &FileNode,
+    docker: Option<&crate::gui::docker::DockerBadgeContext>,
+    full_path: &str,
 ) -> (&'static str, Option<std::borrow::Cow<'static, str>>) {
     if node.has_no_permission() {
         ("🔒", Some(t!("badge-permission-denied")))
@@ -30,10 +36,54 @@ pub(crate) fn node_badge(
         ("🔗", Some(t!("badge-symlink")))
     } else if node.is_special() {
         ("⚙", Some(t!("badge-special-file")))
+    } else if let Some((icon, tooltip)) = docker.and_then(|ctx| ctx.badge_for(full_path)) {
+        (icon, Some(tooltip))
     } else if node.is_directory() {
         ("📁", None)
     } else {
         ("📄", None)
+    }
+}
+
+/// Reconstructs a node's full path from arena components, mirroring
+/// [`FileArenaSnapshot::get_full_path`] for callers (table cell closures)
+/// that only hold the node and string-pool arcs.
+#[must_use]
+fn arena_node_full_path(
+    nodes: &crate::arena::NodeStorage,
+    string_pool: &crate::arena::StringPool,
+    node_idx: u32,
+) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    let mut curr = Some(node_idx);
+    while let Some(idx) = curr {
+        let Some(node) = nodes.get(idx as usize) else {
+            break;
+        };
+        if let Some(name) = string_pool.get(node.name_id)
+            && !name.is_empty()
+        {
+            parts.push(name);
+        }
+        curr = node.parent_opt();
+    }
+    parts.reverse();
+
+    let Some(first) = parts.first() else {
+        return String::new();
+    };
+    if first.starts_with('/') || first.contains(':') {
+        let separator = if first.contains('\\') { '\\' } else { '/' };
+        let mut path = first.to_string();
+        for part in &parts[1..] {
+            if !path.ends_with('/') && !path.ends_with('\\') {
+                path.push(separator);
+            }
+            path.push_str(part);
+        }
+        path
+    } else {
+        parts.join("/")
     }
 }
 
@@ -659,6 +709,7 @@ impl GuiApp {
         let is_expanded = self.table_state.expanded_rows.contains(node_idx);
         let has_children = node.is_directory() && node.first_child != NO_INDEX;
         let is_selected = self.table_state.selected_rows.contains(node_idx);
+        let docker_badge = self.docker_badge_context();
 
         // The exact rect of the expand/collapse arrow, captured during row layout
         // so the row hitbox below can carve out just the arrow (egui gives the
@@ -671,7 +722,8 @@ impl GuiApp {
             ui.add_space(indent_level as f32 * 22.0);
 
             // Icon & Expand Arrow
-            let (icon_text, badge_tooltip) = node_badge(node);
+            let full_path = snapshot.get_full_path(node_idx);
+            let (icon_text, badge_tooltip) = node_badge(node, docker_badge.as_deref(), &full_path);
 
             ui.scope(|ui| {
                 ui.spacing_mut().interact_size.x = 0.0;
@@ -997,6 +1049,7 @@ impl GuiApp {
         let selected_duplicates = self.selected_duplicates.clone();
         let monospace_paths = self.monospace_paths;
         let current_theme = get_current_theme();
+        let docker_badge = self.docker_badge_context();
 
         let active_rows_count = active_rows.len();
 
@@ -1027,7 +1080,15 @@ impl GuiApp {
                         highlight_duplicates && selected_duplicates.contains(&(row_idx as u32));
                     let is_selected = selected_rows.contains(row_idx as u32);
 
-                    let (icon_text, badge_tooltip) = node_badge(node);
+                    let (icon_text, badge_tooltip) = node_badge(
+                        node,
+                        docker_badge.as_deref(),
+                        &arena_node_full_path(
+                            &snapshot_nodes,
+                            &snapshot_string_pool,
+                            row_idx as u32,
+                        ),
+                    );
 
                     let cleaned_name = if node.parent_opt().is_none() {
                         crate::arena::clean_unc_path(name)
@@ -1521,7 +1582,10 @@ impl GuiApp {
                 ui.vertical(|ui| {
                     // Large Icon and Name
                     ui.horizontal(|ui| {
-                        let (icon, badge_tooltip) = node_badge(node);
+                        let docker_badge = self.docker_badge_context();
+                        let full_path = snapshot.get_full_path(node_idx);
+                        let (icon, badge_tooltip) =
+                            node_badge(node, docker_badge.as_deref(), &full_path);
                         let icon_label = ui.label(egui::RichText::new(icon).size(24.0));
                         if let Some(tooltip) = badge_tooltip {
                             icon_label.on_hover_text(tooltip);
@@ -2128,6 +2192,7 @@ mod tests {
         nodes[2].next_sibling = 3;
 
         let snapshot = FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(vec![]),
@@ -2182,22 +2247,78 @@ mod tests {
         let mut noperm = FileNode::new(crate::arena::StringId(0), None, false, false, 0, 0);
         noperm.flags |= FileNode::FLAG_NO_PERMISSION;
 
-        assert_eq!(node_badge(&regular).0, "📄");
-        assert_eq!(node_badge(&regular).1, None);
+        assert_eq!(node_badge(&regular, None, "").0, "📄");
+        assert_eq!(node_badge(&regular, None, "").1, None);
 
-        assert_eq!(node_badge(&dir).0, "📁");
-        assert_eq!(node_badge(&dir).1, None);
+        assert_eq!(node_badge(&dir, None, "").0, "📁");
+        assert_eq!(node_badge(&dir, None, "").1, None);
 
-        assert_eq!(node_badge(&symlink).0, "🔗");
-        assert!(node_badge(&symlink).1.is_some());
+        assert_eq!(node_badge(&symlink, None, "").0, "🔗");
+        assert!(node_badge(&symlink, None, "").1.is_some());
 
-        assert_eq!(node_badge(&dataless).0, "☁");
-        assert!(node_badge(&dataless).1.is_some());
+        assert_eq!(node_badge(&dataless, None, "").0, "☁");
+        assert!(node_badge(&dataless, None, "").1.is_some());
 
-        assert_eq!(node_badge(&special).0, "⚙");
-        assert!(node_badge(&special).1.is_some());
+        assert_eq!(node_badge(&special, None, "").0, "⚙");
+        assert!(node_badge(&special, None, "").1.is_some());
 
-        assert_eq!(node_badge(&noperm).0, "🔒");
-        assert!(node_badge(&noperm).1.is_some());
+        assert_eq!(node_badge(&noperm, None, "").0, "🔒");
+        assert!(node_badge(&noperm, None, "").1.is_some());
+    }
+
+    #[test]
+    fn test_node_badge_docker_paths() {
+        let environment = crate::docker::DockerEnvironment {
+            data_roots: vec![crate::docker::DataRoot {
+                path: std::path::PathBuf::from("/var/lib/docker"),
+                kind: crate::docker::StorageKind::Overlay2,
+                scope: crate::docker::RootScope::System,
+                accessible: true,
+            }],
+            vm_disks: Vec::new(),
+            daemon_socket: None,
+        };
+        let ctx = crate::gui::docker::DockerBadgeContext::from_environment(&environment);
+        let dir = FileNode::new(crate::arena::StringId(0), None, true, false, 0, 0);
+
+        // Data root and direct children get the docker badge.
+        let (icon, tooltip) = node_badge(&dir, Some(&ctx), "/var/lib/docker");
+        assert_eq!(icon, "📦");
+        assert!(tooltip.is_some());
+        let (icon, tooltip) = node_badge(&dir, Some(&ctx), "/var/lib/docker/volumes");
+        assert_eq!(icon, "📦");
+        assert!(tooltip.is_some());
+
+        // Unrelated paths and a missing context keep the plain folder badge.
+        let (icon, tooltip) = node_badge(&dir, Some(&ctx), "/var/lib/other");
+        assert_eq!(icon, "📁");
+        assert!(tooltip.is_none());
+        let (icon, tooltip) = node_badge(&dir, None, "/var/lib/docker");
+        assert_eq!(icon, "📁");
+        assert!(tooltip.is_none());
+
+        // A permission-denied Docker root still shows the lock badge.
+        let mut noperm_dir = FileNode::new(crate::arena::StringId(0), None, true, false, 0, 0);
+        noperm_dir.flags |= FileNode::FLAG_NO_PERMISSION;
+        let (icon, tooltip) = node_badge(&noperm_dir, Some(&ctx), "/var/lib/docker");
+        assert_eq!(icon, "🔒");
+        assert!(tooltip.is_some());
+    }
+
+    #[test]
+    fn test_arena_node_full_path() {
+        let mut pool = StringPool::new();
+        let root_id = pool.get_or_insert(b"/scan");
+        let child_id = pool.get_or_insert(b"child");
+
+        let mut root = FileNode::new(root_id, None, true, false, 0, 0);
+        root.first_child = 1;
+        let child = FileNode::new(child_id, Some(0), true, false, 0, 0);
+        let nodes = Arc::new(NodeStorage::Owned(vec![root, child]));
+        let pool = Arc::new(pool);
+
+        assert_eq!(super::arena_node_full_path(&nodes, &pool, 1), "/scan/child");
+        assert_eq!(super::arena_node_full_path(&nodes, &pool, 0), "/scan");
+        assert_eq!(super::arena_node_full_path(&nodes, &pool, 99), "");
     }
 }

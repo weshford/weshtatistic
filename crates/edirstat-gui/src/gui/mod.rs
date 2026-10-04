@@ -18,12 +18,12 @@ use strum::IntoEnumIterator as _;
 #[cfg(not(target_family = "wasm"))]
 use rfd::FileDialog;
 
-use crate::arena::{StringPool, precompute_dir_counts};
+use crate::arena::precompute_dir_counts;
 
 use super::{
     ScanController,
     arena::FileArenaSnapshot,
-    snapshot::{PersistentArena, load_snapshot},
+    snapshot::LoadedSnapshot,
     state::SharedState,
     stats::{self, StatComponent as _},
 };
@@ -32,6 +32,7 @@ use super::{
 use super::snapshot::save_snapshot;
 
 pub mod deduplicator;
+pub mod docker;
 pub mod explorer;
 pub mod extensions;
 pub mod fonts;
@@ -51,6 +52,7 @@ pub enum VisMode {
     Treemap,
     Plots,
     Deduplicator,
+    Docker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +88,10 @@ pub struct GuiApp {
 
     // Unified TableOperations set
     pub(crate) operations: egui_table_kit::operations::TableOperations,
+
+    // Docker-tab Images table operations (scoped to that table: rendered
+    // only from its context menu, and gated on its TableState id).
+    pub(crate) docker_operations: egui_table_kit::operations::TableOperations,
 
     // UI state
     pub(crate) focus_node_idx: Option<u32>,
@@ -162,6 +168,9 @@ pub struct GuiApp {
     pub(crate) selected_duplicates: HashSet<u32>,
     pub(crate) delete_duplicates_indices: Vec<u32>,
     pub(crate) deduplicator_dir_filter: String,
+
+    // Docker disk-space tab state
+    pub(crate) docker_view: docker::DockerViewState,
 
     // Defer initial CLI scan to the first render frame
     pub(crate) pending_initial_path: Option<PathBuf>,
@@ -414,6 +423,43 @@ impl GuiApp {
             ]);
         }
 
+        // The docker tab has its own registry so its operations can never
+        // appear on (or apply to) the primary explorer table, and vice versa;
+        // each op additionally gates on its table's state id. Group 0 is the
+        // section-agnostic refresh; group 1 the per-section deletes (op index
+        // = `DockerSection::op_index`).
+        let docker_view = docker::DockerViewState::default();
+        let running_flag = docker_view.deletion.running_flag();
+        let collection_running = docker_view.running.clone();
+        let docker_operations = egui_table_kit::operations::TableOperations::new()
+            .with_group(vec![Box::new(
+                crate::gui::operations::DockerRefreshOp::new(
+                    command_tx.clone(),
+                    scanner.clone(),
+                    collection_running,
+                ),
+            )])
+            .with_group(vec![
+                Box::new(crate::gui::operations::DockerDeleteImageOp::new(
+                    shared_state.clone(),
+                    command_tx.clone(),
+                    scanner.clone(),
+                    running_flag.clone(),
+                )),
+                Box::new(crate::gui::operations::DockerDeleteContainerOp::new(
+                    shared_state.clone(),
+                    command_tx.clone(),
+                    scanner.clone(),
+                    running_flag.clone(),
+                )),
+                Box::new(crate::gui::operations::DockerDeleteVolumeOp::new(
+                    shared_state.clone(),
+                    command_tx.clone(),
+                    scanner.clone(),
+                    running_flag,
+                )),
+            ]);
+
         #[cfg(target_os = "windows")]
         let active_modal = if cli_or_gui::is_elevated() {
             None
@@ -499,6 +545,8 @@ impl GuiApp {
             selected_duplicates: HashSet::new(),
             delete_duplicates_indices: Vec::new(),
             deduplicator_dir_filter: String::new(),
+            docker_view,
+            docker_operations,
 
             pending_initial_path: initial_path,
 
@@ -652,8 +700,8 @@ impl GuiApp {
     }
 
     pub fn load_snapshot_file(&mut self, path: PathBuf) -> Result<(), crate::EdirstatError> {
-        let (arena, string_pool) = load_snapshot(&path)?;
-        self.ingest_loaded_snapshot(arena, string_pool);
+        let loaded = crate::snapshot::load_snapshot_full(&path)?;
+        self.ingest_loaded_snapshot(loaded);
         let file_name = path
             .file_name()
             .map(|s| s.to_string_lossy())
@@ -671,13 +719,13 @@ impl GuiApp {
         display_name: &str,
         bytes: &[u8],
     ) -> Result<(), crate::EdirstatError> {
-        let (arena, string_pool) = crate::snapshot::load_snapshot_from_bytes(bytes)?;
-        self.ingest_loaded_snapshot(arena, string_pool);
+        let loaded = crate::snapshot::load_snapshot_full_from_bytes(bytes)?;
+        self.ingest_loaded_snapshot(loaded);
         self.current_scan_path = Some(PathBuf::from(display_name));
         Ok(())
     }
 
-    fn ingest_loaded_snapshot(&mut self, arena: PersistentArena, string_pool: StringPool) {
+    fn ingest_loaded_snapshot(&mut self, loaded: LoadedSnapshot) {
         self.reset_state();
 
         // Select the root row by default
@@ -686,9 +734,10 @@ impl GuiApp {
 
         // Keep the nodes in the memory map zero-copy
         let loaded_snapshot = FileArenaSnapshot {
-            dir_counts: Arc::new(precompute_dir_counts(arena.nodes())),
-            nodes: Arc::new(crate::arena::NodeStorage::Mmapped(arena)),
-            string_pool: Arc::new(string_pool),
+            dir_counts: Arc::new(precompute_dir_counts(loaded.arena.nodes())),
+            nodes: Arc::new(crate::arena::NodeStorage::Mmapped(loaded.arena)),
+            string_pool: Arc::new(loaded.string_pool),
+            extensions: loaded.extensions,
         };
         self.shared_state.store_snapshot(loaded_snapshot);
         self.scan_start_time = None;
@@ -1445,10 +1494,32 @@ impl GuiApp {
                         });
                     }
                 }
+                VisMode::Docker => {
+                    ui.heading(
+                        egui::RichText::new(t!("vis-mode-docker"))
+                            .strong()
+                            .color(ui.visuals().strong_text_color()),
+                    );
+                }
             }
 
             // Right side: Active Visualizer Modes
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Docker disk usage requires live filesystem access (native-only)
+                if crate::IS_NATIVE || !crate::HIDE_NA_UI {
+                    let res = ui
+                        .add_enabled_ui(crate::IS_NATIVE, |ui| {
+                            ui.selectable_value(
+                                &mut self.vis_mode,
+                                VisMode::Docker,
+                                t!("vis-mode-docker"),
+                            )
+                        })
+                        .inner;
+                    if !crate::IS_NATIVE {
+                        res.on_disabled_hover_text(t!("web-not-available"));
+                    }
+                }
                 // Deduplication requires live filesystem access (native-only)
                 if crate::IS_NATIVE || !crate::HIDE_NA_UI {
                     let res = ui
@@ -1524,6 +1595,14 @@ impl GuiApp {
                         self.execute_deletion(&self.delete_node_indices.clone(), false, ctx);
                         self.delete_node_indices.clear();
                     }
+                }
+                crate::gui::operations::AppCommand::RefreshDockerInventory => {
+                    self.start_docker_collection();
+                }
+                crate::gui::operations::AppCommand::ShowDockerDeleteResourceModal(targets) => {
+                    // Fresh modal state: the force flag defaults OFF.
+                    self.docker_view.delete_force = false;
+                    self.active_modal = Some(ActiveModal::DockerDeleteResource { targets });
                 }
                 crate::gui::operations::AppCommand::BackgroundOpCompleted(result) => {
                     match result {
@@ -2860,6 +2939,9 @@ impl GuiApp {
                 VisMode::Deduplicator => {
                     self.render_deduplicator_tab(ui, snapshot);
                 }
+                VisMode::Docker => {
+                    self.render_docker_tab(ui, snapshot);
+                }
             }
         });
     }
@@ -2868,89 +2950,88 @@ impl GuiApp {
         let default_top_height = (ui.available_height() * 0.5).clamp(180.0, 1200.0);
 
         // We want a top panel and a bottom panel (Central Panel space).
-        egui::Panel::top("windirstat_top_panel")
+        let top_panel = egui::Panel::top("windirstat_top_panel")
             .resizable(true)
             .default_size(default_top_height)
-            .size_range(150.0..=1200.0)
-            .show(ui, |ui| {
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    // Render operations directly as a flat row of toolbar buttons
-                    ui.spacing_mut().item_spacing.x = 8.0;
+            .size_range(150.0..=1200.0);
+        top_panel.show(ui, |ui| {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                // Render operations directly as a flat row of toolbar buttons
+                ui.spacing_mut().item_spacing.x = 8.0;
 
-                    self.draw_custom_operations_toolbar(ui, snapshot);
+                self.draw_custom_operations_toolbar(ui, snapshot);
 
-                    // Separator between operations and the search/filter box
-                    ui.separator();
-
-                    // Filter search input
-                    ui.label(t!("search-filter-label"));
-                    if !self.search_query.is_empty() && ui.button("❌").clicked() {
-                        self.search_query.clear();
-                    }
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let reg = self.filter_regex;
-                        let reg_btn = ui
-                            .selectable_label(reg, egui::RichText::new(".*").strong())
-                            .on_hover_text(t!("search-use-regex"));
-                        if reg_btn.clicked() {
-                            self.filter_regex = !reg;
-                        }
-
-                        let case_sens = self.filter_case_sensitive;
-                        let case_btn = ui
-                            .selectable_label(case_sens, egui::RichText::new("Aa").strong())
-                            .on_hover_text(t!("search-match-case"));
-                        if case_btn.clicked() {
-                            self.filter_case_sensitive = !case_sens;
-                        }
-
-                        let text_width = ui.available_width() - 8.0;
-                        let sc_search =
-                            shortcuts::format_shortcut(ui.ctx(), &shortcuts::SHORTCUT_SEARCH);
-                        let resp = ui
-                            .add(
-                                egui::TextEdit::singleline(&mut self.search_query)
-                                    .id_salt("windirstat_filter_text_edit")
-                                    .hint_text(format!("Filter ({sc_search})…"))
-                                    .desired_width(text_width.max(50.0)),
-                            )
-                            .on_hover_text(format!("{} ({sc_search})", t!("search-filter-label")));
-                        if self.focus_search {
-                            resp.request_focus();
-                            self.focus_search = false;
-                        }
-                    });
-                });
+                // Separator between operations and the search/filter box
                 ui.separator();
 
-                // If selection exists, pop out detail panel on the right of the top section
-                if !self.table_state.selected_rows.is_empty() {
-                    egui::Panel::right("windirstat_detail_panel")
-                        .resizable(true)
-                        .default_size(260.0)
-                        .size_range(160.0..=450.0)
-                        .show(ui, |ui| {
-                            if self.table_state.selected_rows.len() == 1 {
-                                if let Some(selected_idx) =
-                                    self.table_state.selected_rows.iter().next()
-                                {
-                                    self.render_file_detail_list(ui, snapshot, selected_idx);
-                                }
-                            } else {
-                                self.render_multi_file_detail_list(ui, snapshot);
-                            }
-                        });
+                // Filter search input
+                ui.label(t!("search-filter-label"));
+                if !self.search_query.is_empty() && ui.button("❌").clicked() {
+                    self.search_query.clear();
                 }
 
-                // The rest is the table view
-                let mut frame = egui::Frame::central_panel(ui.style());
-                frame.inner_margin.top = 2; // Shrink top padding above the table
-                egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-                    self.render_hierarchical_table(ui, snapshot);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let reg = self.filter_regex;
+                    let reg_btn = ui
+                        .selectable_label(reg, egui::RichText::new(".*").strong())
+                        .on_hover_text(t!("search-use-regex"));
+                    if reg_btn.clicked() {
+                        self.filter_regex = !reg;
+                    }
+
+                    let case_sens = self.filter_case_sensitive;
+                    let case_btn = ui
+                        .selectable_label(case_sens, egui::RichText::new("Aa").strong())
+                        .on_hover_text(t!("search-match-case"));
+                    if case_btn.clicked() {
+                        self.filter_case_sensitive = !case_sens;
+                    }
+
+                    let text_width = ui.available_width() - 8.0;
+                    let sc_search =
+                        shortcuts::format_shortcut(ui.ctx(), &shortcuts::SHORTCUT_SEARCH);
+                    let resp = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.search_query)
+                                .id_salt("windirstat_filter_text_edit")
+                                .hint_text(format!("Filter ({sc_search})…"))
+                                .desired_width(text_width.max(50.0)),
+                        )
+                        .on_hover_text(format!("{} ({sc_search})", t!("search-filter-label")));
+                    if self.focus_search {
+                        resp.request_focus();
+                        self.focus_search = false;
+                    }
                 });
             });
+            ui.separator();
+
+            // If selection exists, pop out detail panel on the right of the top section
+            if !self.table_state.selected_rows.is_empty() {
+                egui::Panel::right("windirstat_detail_panel")
+                    .resizable(true)
+                    .default_size(260.0)
+                    .size_range(160.0..=450.0)
+                    .show(ui, |ui| {
+                        if self.table_state.selected_rows.len() == 1 {
+                            if let Some(selected_idx) = self.table_state.selected_rows.iter().next()
+                            {
+                                self.render_file_detail_list(ui, snapshot, selected_idx);
+                            }
+                        } else {
+                            self.render_multi_file_detail_list(ui, snapshot);
+                        }
+                    });
+            }
+
+            // The rest is the table view
+            let mut frame = egui::Frame::central_panel(ui.style());
+            frame.inner_margin.top = 2; // Shrink top padding above the table
+            egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+                self.render_hierarchical_table(ui, snapshot);
+            });
+        });
 
         // The remaining area becomes the bottom section
         egui::CentralPanel::default().show(ui, |ui| {
@@ -2959,7 +3040,10 @@ impl GuiApp {
                 ui.separator();
 
                 // Right Extensions Panel inside the bottom section if not collapsed
-                if !self.right_panel_collapsed && self.vis_mode != VisMode::Deduplicator {
+                if !self.right_panel_collapsed
+                    && self.vis_mode != VisMode::Deduplicator
+                    && self.vis_mode != VisMode::Docker
+                {
                     egui::Panel::right("windirstat_extensions_panel")
                         .resizable(true)
                         .default_size(210.0)
@@ -3113,6 +3197,9 @@ impl GuiApp {
                     }
                     VisMode::Deduplicator => {
                         self.render_deduplicator_tab(ui, snapshot);
+                    }
+                    VisMode::Docker => {
+                        self.render_docker_tab(ui, snapshot);
                     }
                 }
             });

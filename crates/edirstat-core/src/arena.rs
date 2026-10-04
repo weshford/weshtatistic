@@ -347,9 +347,21 @@ pub struct FileArenaSnapshot {
     pub string_pool: Arc<StringPool>,
     /// Precomputed subdirectory counts indexed by node ID
     pub dir_counts: Arc<Vec<u32>>,
+    /// Extension payloads carried by the snapshot (e.g. a Docker inventory
+    /// collected at scan time). Empty for snapshots without extensions.
+    pub extensions: crate::extensions::ExtensionStore,
 }
 
 impl FileArenaSnapshot {
+    /// Decoded `EXT_DOCKER_INVENTORY` extension, if this snapshot carries one.
+    #[must_use]
+    pub fn docker_inventory(&self) -> Option<crate::docker::DockerInventory> {
+        let entry = self
+            .extensions
+            .get(crate::extensions::EXT_DOCKER_INVENTORY)?;
+        crate::docker::DockerInventory::from_extension_payload(&entry.payload)
+    }
+
     /// Reconstruct the full path of a node by walking up parent indices
     #[must_use]
     pub fn get_full_path(&self, node_idx: u32) -> String {
@@ -580,6 +592,7 @@ mod tests {
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(dir_counts),
+            extensions: crate::extensions::ExtensionStore::default(),
         };
 
         assert_eq!(snapshot.get_full_path(0), "/home/tux");
@@ -605,6 +618,7 @@ mod tests {
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(dir_counts),
+            extensions: crate::extensions::ExtensionStore::default(),
         };
 
         assert_eq!(snapshot.get_full_path(0), "C:\\");
@@ -822,6 +836,7 @@ mod tests {
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(vec![]),
+            extensions: crate::extensions::ExtensionStore::default(),
         };
 
         assert_eq!(snapshot.resolve_path_index("/root"), Some(0));
@@ -851,6 +866,7 @@ mod tests {
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(vec![]),
+            extensions: crate::extensions::ExtensionStore::default(),
         };
 
         assert_eq!(snapshot.resolve_path_index("/root/nope"), None);
@@ -885,6 +901,7 @@ mod tests {
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(dir_counts),
+            extensions: crate::extensions::ExtensionStore::default(),
         };
         assert_eq!(snapshot.get_full_path(0), "lone_root");
     }
@@ -906,6 +923,7 @@ mod tests {
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(vec![]),
+            extensions: crate::extensions::ExtensionStore::default(),
         };
         assert_eq!(snapshot.get_full_path(1), "child");
         assert_eq!(snapshot.get_full_path(0), "root");
@@ -925,6 +943,7 @@ mod tests {
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(vec![]),
+            extensions: crate::extensions::ExtensionStore::default(),
         };
 
         assert_eq!(snapshot.resolve_path_index("/root/child"), Some(1));

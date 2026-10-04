@@ -211,6 +211,7 @@ impl Coordinator {
                     nodes: Arc::new(NodeStorage::Owned(published_arena)),
                     string_pool: Arc::new(string_pool.clone()),
                     dir_counts,
+                    extensions: crate::extensions::ExtensionStore::default(),
                 };
                 self.shared_state.store_snapshot(snapshot);
 
@@ -234,6 +235,7 @@ impl Coordinator {
                 nodes: Arc::new(NodeStorage::Owned(Vec::new())),
                 string_pool: Arc::new(StringPool::new()),
                 dir_counts: Arc::new(Vec::new()),
+                extensions: crate::extensions::ExtensionStore::default(),
             };
             self.shared_state.store_snapshot(empty_snapshot);
             self.shared_state
@@ -249,6 +251,7 @@ impl Coordinator {
                 nodes: Arc::new(NodeStorage::Owned(arena)),
                 string_pool: Arc::new(string_pool),
                 dir_counts,
+                extensions: crate::extensions::ExtensionStore::default(),
             };
             self.shared_state.store_snapshot(snapshot);
 

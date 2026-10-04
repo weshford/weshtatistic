@@ -32,7 +32,9 @@ pub mod gui;
 pub mod preferences;
 pub mod stats;
 
-pub use edirstat_core::{EdirstatError, arena, file_id, snapshot, state, time_utils};
+pub use edirstat_core::{
+    EdirstatError, arena, docker, extensions, file_id, snapshot, state, time_utils,
+};
 pub use gui::theme as colors;
 
 pub use gui::{GuiApp, Locale};
@@ -63,4 +65,10 @@ pub trait ScanController: Send + Sync {
 
     /// Number of worker threads a scan will use (displayed in the UI).
     fn num_threads(&self) -> usize;
+
+    /// Native-only Docker inventory capability. Returns `None` on wasm and on
+    /// backends without Docker support; the native engine returns a collector.
+    fn docker_collector(&self) -> Option<std::sync::Arc<dyn docker::DockerCollector>> {
+        None
+    }
 }

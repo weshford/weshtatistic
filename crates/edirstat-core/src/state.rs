@@ -52,6 +52,7 @@ impl SharedState {
             nodes: Arc::new(NodeStorage::Owned(Vec::new())),
             string_pool: Arc::new(StringPool::new()),
             dir_counts: Arc::new(Vec::new()),
+            extensions: crate::extensions::ExtensionStore::default(),
         };
         Self {
             current_snapshot: ArcSwap::new(Arc::new(initial_snapshot)),
@@ -135,6 +136,7 @@ mod tests {
             )])),
             string_pool: Arc::new(StringPool::new()),
             dir_counts: Arc::new(vec![0]),
+            extensions: crate::extensions::ExtensionStore::default(),
         };
         state.store_snapshot(snapshot);
 

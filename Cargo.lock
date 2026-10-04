@@ -1288,9 +1288,11 @@ dependencies = [
  "mimalloc-rspack",
  "parking_lot",
  "rayon",
+ "serde_json",
  "smallvec",
  "sysinfo",
  "tracy-client",
+ "windows-sys 0.61.2",
  "winresource",
 ]
 
@@ -1305,6 +1307,7 @@ dependencies = [
  "compact_str",
  "getrandom 0.3.4",
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "winapi-util",
  "xgx_intern",
@@ -1429,9 +1432,9 @@ dependencies = [
 
 [[package]]
 name = "egui-table-kit"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb3708d9545f52049da17d1e51520e0929f189f2973f191391362db4031b243b"
+checksum = "4576bed82e84218e9a99d707d6ecaf05a471c7cec2433de4edf3dc8e25edf53b"
 dependencies = [
  "ahash",
  "bitflags 2.13.2",

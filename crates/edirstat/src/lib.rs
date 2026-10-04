@@ -1,4 +1,6 @@
-#![forbid(unsafe_code)]
+// `deny` (not `forbid`) so the one sanctioned `windows-sys` FFI call for
+// `GetCompressedFileSizeW` can opt back in locally (see engine::docker).
+#![deny(unsafe_code)]
 // -- Clippy Denies --
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 // --- Clippy Lint Groups & Specific Warnings ---
@@ -36,7 +38,7 @@
 
 pub mod engine;
 
-pub use edirstat_core::{EdirstatError, arena, fs_utils, snapshot, time_utils};
+pub use edirstat_core::{EdirstatError, arena, extensions, fs_utils, snapshot, time_utils};
 pub use edirstat_gui as gui;
 pub use engine::{coordinator, traversal};
 pub use gui::colors;

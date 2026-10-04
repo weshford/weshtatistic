@@ -2,6 +2,19 @@
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **🐳 Docker disk-space view:** New Docker tab (native builds) that detects Docker installations and attributes disk usage: images with shared/exclusive layer sizes, container writable layers and JSON logs, named volumes, and BuildKit cache. Collection works three ways, tried in order: the daemon API over the local socket (`/system/df`; full attribution on any storage layout), direct parsing of `/var/lib/docker` (overlay2, system and rootless, honoring the daemon's configured `data-root`), and a partial disk parse for containerd-store roots (containers, logs, volumes, build cache). Detects the storage-driver layout (overlay2, btrfs, zfs, vfs, aufs, devicemapper, windowsfilter, containerd image store), flags reclaimable unreferenced layers and oversized container logs, and refines sizes from the current scan snapshot when it covers the data root. Docker Desktop VM disks (`Docker.raw` on macOS, `*.vhdx` on Windows/WSL2) are detected and shown with allocated-vs-apparent sizes. Docker-managed paths are badged in the explorer. The Images/Containers/Volumes tables use the same `egui-table-kit` framework as the main explorer, with a compact op toolbar above the table and per-resource deletion as real `TableOperation`s supporting multi-select batches (context menu + toolbar, daemon API, confirmation modal with optional force, daemon errors surfaced verbatim). Tables show layer counts, creation times, and container reference counts (highlighting prune candidates). Detection tracing is available via `EDIRSTAT_DOCKER_DEBUG=1`.
+- **📦 Snapshot extensions & headless Docker collection:** `.edst` snapshots now have a generic extension container (typed, versioned payloads appended after the V3 payload; old readers ignore them). Scans — GUI and headless CLI alike — automatically collect the Docker inventory into the snapshot (first consumer: extension `DKR0`), so inventories can be captured as root on a server and reviewed later anywhere, including the web viewer. Opt out with `--no-docker`.
+
+### Fixed
+
+- **🔀 Overlay mounts no longer double-counted:** Full-filesystem scans on Linux now skip `overlay` filesystem mountpoints (e.g. running containers' `merged/` views), whose bytes are already counted under their layer `diff/` directories.
+
+---
+
 ## [v2.2.0] - 2026-09-06
 
 **eDirStat 2.2.0 brings interactive treemap zoom with breadcrumb navigation, ten new languages (now 18 total) with automatic system locale detection, native file manager revealing, visual badges for cloud placeholders and special files, full Mac App Store / Apple App Sandbox packaging, a privacy policy with in-app legal notices, and hardened filesystem deletion and deduplication.**

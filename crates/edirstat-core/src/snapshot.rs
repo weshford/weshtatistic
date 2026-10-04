@@ -182,7 +182,25 @@ pub fn save_snapshot_v3(
     path: &Path,
     compress: bool,
 ) -> Result<(), crate::EdirstatError> {
-    let bytes = save_snapshot_to_bytes(nodes, string_pool, compress)?;
+    save_snapshot_ext(
+        nodes,
+        string_pool,
+        path,
+        compress,
+        &crate::extensions::ExtensionStore::default(),
+    )
+}
+
+/// Like [`save_snapshot_v3`], with extension payloads (see
+/// `crate::extensions`) appended to the file.
+pub fn save_snapshot_ext(
+    nodes: &[FileNode],
+    string_pool: &StringPool,
+    path: &Path,
+    compress: bool,
+    extensions: &crate::extensions::ExtensionStore,
+) -> Result<(), crate::EdirstatError> {
+    let bytes = save_snapshot_to_bytes_ext(nodes, string_pool, compress, extensions)?;
 
     let mut file = File::create(path)?;
     file.write_all(&bytes)?;
@@ -196,6 +214,23 @@ pub fn save_snapshot_to_bytes(
     nodes: &[FileNode],
     string_pool: &StringPool,
     compress: bool,
+) -> Result<Vec<u8>, crate::EdirstatError> {
+    save_snapshot_to_bytes_ext(
+        nodes,
+        string_pool,
+        compress,
+        &crate::extensions::ExtensionStore::default(),
+    )
+}
+
+/// Like [`save_snapshot_to_bytes`], with extension payloads appended after
+/// the string pool and located via `FileHeader.reserved[0]`. Older readers
+/// stop at `72 + uncompressed_size` and ignore the tail.
+pub fn save_snapshot_to_bytes_ext(
+    nodes: &[FileNode],
+    string_pool: &StringPool,
+    compress: bool,
+    extensions: &crate::extensions::ExtensionStore,
 ) -> Result<Vec<u8>, crate::EdirstatError> {
     let (arena_string, offsets) = string_pool.export_for_save()?;
 
@@ -330,6 +365,13 @@ pub fn save_snapshot_to_bytes(
     let string_pool_length = sp_buf.len();
     let uncompressed_size = nodes_size + string_pool_length;
 
+    // Extension payloads live after the string pool; reserved[0] points at
+    // their directory. This is the only reserved slot the extension
+    // mechanism ever consumes (see crate::extensions).
+    let (ext_bytes, ext_dir_offset) = extensions
+        .encode(72 + uncompressed_size as u64)
+        .unwrap_or((Vec::new(), 0));
+
     let header = FileHeader {
         magic: *b"EDST",
         version: FILE_VERSION_V3,
@@ -338,7 +380,7 @@ pub fn save_snapshot_to_bytes(
         node_count: nodes.len() as u64,
         string_pool_offset: nodes_size as u64,
         string_pool_length: string_pool_length as u64,
-        reserved: [0; 4],
+        reserved: [ext_dir_offset, 0, 0, 0],
     };
 
     // Serialize uncompressed payload into a memory buffer
@@ -362,6 +404,9 @@ pub fn save_snapshot_to_bytes(
     // Append string pool
     edst_bytes.write_all(&sp_buf)?;
 
+    // Append extension payloads + directory (empty when there are none)
+    edst_bytes.write_all(&ext_bytes)?;
+
     if compress {
         Ok(zstd::encode_all(&edst_bytes[..], ZSTD_COMPRESSION_LEVEL)?)
     } else {
@@ -373,12 +418,27 @@ pub fn save_snapshot_to_bytes(
 // Deserialization API (Supporting both Version 2 and Version 3)
 // =============================================================================
 
+/// A fully decoded snapshot: arena, string pool, and any extension payloads
+/// (see `crate::extensions`).
+#[derive(Debug)]
+pub struct LoadedSnapshot {
+    pub arena: PersistentArena,
+    pub string_pool: StringPool,
+    pub extensions: crate::extensions::ExtensionStore,
+}
+
 pub fn load_snapshot(path: &Path) -> Result<(PersistentArena, StringPool), crate::EdirstatError> {
+    let loaded = load_snapshot_full(path)?;
+    Ok((loaded.arena, loaded.string_pool))
+}
+
+/// Loads a snapshot and its extension payloads from disk.
+pub fn load_snapshot_full(path: &Path) -> Result<LoadedSnapshot, crate::EdirstatError> {
     let mut file = File::open(path)?;
     let mut file_bytes = Vec::new();
     file.read_to_end(&mut file_bytes)?;
 
-    load_snapshot_from_bytes(&file_bytes)
+    load_snapshot_full_from_bytes(&file_bytes)
 }
 
 /// Deserializes a snapshot (Version 2 or Version 3) from an in-memory buffer.
@@ -388,6 +448,16 @@ pub fn load_snapshot(path: &Path) -> Result<(PersistentArena, StringPool), crate
 pub fn load_snapshot_from_bytes(
     bytes: &[u8],
 ) -> Result<(PersistentArena, StringPool), crate::EdirstatError> {
+    let loaded = load_snapshot_full_from_bytes(bytes)?;
+    Ok((loaded.arena, loaded.string_pool))
+}
+
+/// Full deserializer: snapshot data plus extension payloads.
+///
+/// Transparently decompresses a standard Zstd container if detected
+/// (magic: 0x28B52FFD). A malformed extension directory degrades to "no
+/// extensions" rather than failing the load.
+pub fn load_snapshot_full_from_bytes(bytes: &[u8]) -> Result<LoadedSnapshot, crate::EdirstatError> {
     let decompressed;
     let mut file_bytes: &[u8] = bytes;
     if file_bytes.len() >= 4 && file_bytes[0..4] == [0x28, 0xB5, 0x2F, 0xFD] {
@@ -414,6 +484,15 @@ pub fn load_snapshot_from_bytes(
     if header.version != FILE_VERSION_V2 && header.version != FILE_VERSION_V3 {
         return Err(crate::EdirstatError::UnsupportedVersion(header.version));
     }
+
+    // Extension directory (V3+): reserved[0] is its absolute offset in the
+    // decompressed stream. Malformed directories degrade to "no extensions".
+    let extensions = if header.version == FILE_VERSION_V3 && header.reserved[0] != 0 {
+        crate::extensions::ExtensionStore::decode(file_bytes, header.reserved[0])
+            .unwrap_or_default()
+    } else {
+        crate::extensions::ExtensionStore::default()
+    };
 
     // Validate that the declared payload size fits in the host address space
     // before any arithmetic that would silently truncate it on 32-bit targets.
@@ -784,7 +863,11 @@ pub fn load_snapshot_from_bytes(
     };
 
     let arena = PersistentArena::new(decoded_nodes);
-    Ok((arena, string_pool))
+    Ok(LoadedSnapshot {
+        arena,
+        string_pool,
+        extensions,
+    })
 }
 
 /// Bounds-checked extraction of a length-prefixed column slice. Returns the
@@ -812,6 +895,87 @@ fn take_column(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tiny_snapshot() -> (Vec<FileNode>, StringPool) {
+        let mut pool = StringPool::new();
+        let r_id = pool.get_or_insert(b"root");
+        let f_id = pool.get_or_insert(b"f.txt");
+        let mut nodes = vec![
+            FileNode::new(r_id, None, true, false, 0, 0),
+            FileNode::new(f_id, Some(0), false, false, 0, 0),
+        ];
+        nodes[0].first_child = 1;
+        nodes[0].size = 42;
+        nodes[1].size = 42;
+        (nodes, pool)
+    }
+
+    #[test]
+    fn test_extensions_roundtrip() -> Result<(), crate::EdirstatError> {
+        let (nodes, pool) = tiny_snapshot();
+        let mut store = crate::extensions::ExtensionStore::default();
+        store.insert(
+            crate::extensions::EXT_DOCKER_INVENTORY,
+            1,
+            Arc::from(&b"{\"images\":[]}"[..]),
+        );
+        store.insert(
+            u32::from_le_bytes(*b"UNKN"),
+            3,
+            Arc::from(&b"future-feature"[..]),
+        );
+
+        for compress in [false, true] {
+            let bytes = save_snapshot_to_bytes_ext(&nodes, &pool, compress, &store)?;
+            let loaded = load_snapshot_full_from_bytes(&bytes)?;
+            assert_eq!(loaded.extensions.len(), 2);
+            let dkr = loaded
+                .extensions
+                .get(crate::extensions::EXT_DOCKER_INVENTORY);
+            assert_eq!(dkr.map(|e| &*e.payload), Some(&b"{\"images\":[]}"[..]));
+            let unknown = loaded.extensions.get(u32::from_le_bytes(*b"UNKN"));
+            assert_eq!(unknown.map(|e| e.version), Some(3));
+
+            // Backward compatibility: legacy readers must tolerate the tail.
+            let (arena, _) = load_snapshot_from_bytes(&bytes)?;
+            assert_eq!(arena.nodes().len(), 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_full_loader_without_extensions() -> Result<(), crate::EdirstatError> {
+        let (nodes, pool) = tiny_snapshot();
+        for compress in [false, true] {
+            let bytes = save_snapshot_to_bytes(&nodes, &pool, compress)?;
+            let loaded = load_snapshot_full_from_bytes(&bytes)?;
+            assert!(loaded.extensions.is_empty());
+            assert_eq!(loaded.arena.nodes().len(), 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_corrupt_extension_dir_degrades() -> Result<(), crate::EdirstatError> {
+        let (nodes, pool) = tiny_snapshot();
+        let mut store = crate::extensions::ExtensionStore::default();
+        store.insert(
+            crate::extensions::EXT_DOCKER_INVENTORY,
+            1,
+            Arc::from(&b"payload"[..]),
+        );
+        let mut bytes = save_snapshot_to_bytes_ext(&nodes, &pool, false, &store)?;
+
+        // FileHeader layout: reserved[0] (directory offset) at bytes 40..48.
+        let dir_offset = u64::from_le_bytes(bytes[40..48].try_into().unwrap_or([0; 8])) as usize;
+        assert!(dir_offset > 0);
+        bytes[dir_offset] = b'X'; // smash the "EDSX" magic
+
+        let loaded = load_snapshot_full_from_bytes(&bytes)?;
+        assert!(loaded.extensions.is_empty());
+        assert_eq!(loaded.arena.nodes().len(), 2);
+        Ok(())
+    }
 
     #[test]
     fn test_uncompressed_roundtrip() -> Result<(), crate::EdirstatError> {
@@ -1366,6 +1530,7 @@ mod tests {
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(dir_counts),
+            extensions: crate::extensions::ExtensionStore::default(),
         };
 
         let (arena, pool_loaded) = load_snapshot_from_bytes(&bytes)?;
@@ -1375,6 +1540,7 @@ mod tests {
             nodes: Arc::new(NodeStorage::Mmapped(arena)),
             string_pool: Arc::new(pool_loaded),
             dir_counts: Arc::new(loaded_dir_counts),
+            extensions: crate::extensions::ExtensionStore::default(),
         };
 
         for idx in 0..node_count as u32 {

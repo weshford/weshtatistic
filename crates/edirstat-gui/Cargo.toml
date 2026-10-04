@@ -24,7 +24,7 @@ atomic-progress = { version = "0.1.6", default-features = false, features = [
 ] }
 compact_str = "0.10.0"
 eframe = "0.36.2"
-egui-table-kit = "0.7.0"
+egui-table-kit = "0.7.1"
 egui_extras = { version = "0.36.2", features = ["image"] }
 egui_plot = "0.37.0"
 fixedbitset = "0.5.7"

@@ -148,6 +148,7 @@ impl super::GuiApp {
                             nodes: snapshot.nodes.clone(),
                             string_pool: snapshot.string_pool.clone(),
                             dir_counts: snapshot.dir_counts.clone(),
+                            extensions: snapshot.extensions.clone(),
                         });
 
                         self.deduplicator_progress =

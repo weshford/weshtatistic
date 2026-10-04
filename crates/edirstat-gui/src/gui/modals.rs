@@ -18,6 +18,9 @@ pub enum ActiveModal {
     TrashDuplicates,
     HardlinkDuplicates,
     SoftlinkDuplicates,
+    DockerDeleteResource {
+        targets: Vec<super::docker::DockerDeleteTarget>,
+    },
     HowItWorks,
     AdminWarning,
     Processing(String),
@@ -457,6 +460,7 @@ impl GuiApp {
             nodes: std::sync::Arc::new(NodeStorage::Owned(cloned_nodes)),
             string_pool: current_snap.string_pool.clone(),
             dir_counts,
+            extensions: current_snap.extensions.clone(),
         };
         self.shared_state.store_snapshot(new_snapshot);
     }
@@ -1309,6 +1313,185 @@ impl GuiApp {
                                         self.active_modal = None;
                                     }
                                 }
+                            });
+                        });
+                });
+            if !open {
+                self.active_modal = None;
+            }
+        }
+
+        // Render the Docker resource deletion confirmation modal
+        // (images, containers, and volumes share this one render path, with
+        // per-kind wording resolved from the targets' resource kind; several
+        // selected resources get the plural layout with a capped name list).
+        let docker_delete = match &self.active_modal {
+            Some(ActiveModal::DockerDeleteResource { targets }) => Some(targets.clone()),
+            _ => None,
+        };
+        // Defensive: an empty batch should never be queued.
+        if docker_delete.as_ref().is_some_and(Vec::is_empty) {
+            self.active_modal = None;
+        }
+        let docker_delete = docker_delete.filter(|targets| !targets.is_empty());
+        if let Some(targets) = docker_delete {
+            let first = &targets[0];
+            let kind = first.kind;
+            let multi = targets.len() > 1;
+            let title = t!(if multi {
+                kind.title_multi_key()
+            } else {
+                kind.title_key()
+            });
+            let size_str = prettier_bytes::ByteFormatter::new()
+                .format(targets.iter().map(|target| target.size_bytes).sum::<u64>())
+                .to_string();
+            let extra_str = prettier_bytes::ByteFormatter::new()
+                .format(targets.iter().map(|target| target.extra_bytes).sum::<u64>())
+                .to_string();
+            let mut open = true;
+            egui::Window::new(title.as_ref())
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .collapsible(false)
+                .resizable(false)
+                .default_width(520.0)
+                .open(&mut open)
+                .title_bar(false) // Disable default system title bar for uniform styling
+                .frame(
+                    egui::Frame::window(&ctx.global_style())
+                        .fill(theme::get_bg_window())
+                        .stroke(egui::Stroke::new(
+                            1.2f32,
+                            egui::Color32::from_rgb(74, 85, 104),
+                        ))
+                        .inner_margin(egui::Margin::ZERO)
+                        .corner_radius(8.0),
+                )
+                .show(ctx, |ui| {
+                    // Custom Header Area
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin::symmetric(16, 12))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.heading(
+                                    egui::RichText::new(title.as_ref())
+                                        .color(ui.visuals().strong_text_color())
+                                        .strong(),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let close_btn = ui.button("❌");
+                                        if close_btn.clicked() {
+                                            self.active_modal = None;
+                                        }
+                                    },
+                                );
+                            });
+                        });
+
+                    // Thin, subtle separator line matching normal panels
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 1.0),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().hline(
+                        rect.left()..=rect.right(),
+                        rect.center().y,
+                        egui::Stroke::new(1.0f32, theme::get_stroke_border()),
+                    );
+
+                    // Modal Content Frame
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin::same(16))
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                                if multi {
+                                    ui.label(t!(kind.confirm_multi_key(), {
+                                        "count" => targets.len(),
+                                        "size" => size_str.as_str(),
+                                        "extra" => extra_str.as_str()
+                                    }));
+                                    // Capped name list of everything the
+                                    // batch will remove.
+                                    let names: Vec<String> =
+                                        targets.iter().map(|target| target.name.clone()).collect();
+                                    let (head, more) = super::docker::modal_name_head(&names);
+                                    egui::Frame::new()
+                                        .fill(theme::get_bg_panel())
+                                        .stroke(egui::Stroke::new(1.0, theme::get_stroke_border()))
+                                        .inner_margin(egui::Margin::same(12))
+                                        .corner_radius(4.0)
+                                        .show(ui, |ui| {
+                                            for name in head {
+                                                ui.small(name);
+                                            }
+                                            if more > 0 {
+                                                ui.small(t!("docker-delete-more", {
+                                                    "count" => more
+                                                }));
+                                            }
+                                        });
+                                } else {
+                                    ui.label(t!(kind.confirm_key(), {
+                                        "name" => first.name.as_str(),
+                                        "size" => size_str.as_str(),
+                                        "extra" => extra_str.as_str()
+                                    }));
+                                }
+
+                                ui.add_space(8.0);
+                                ui.separator();
+                                ui.add_space(8.0);
+
+                                // Per-kind warning: what the daemon does and
+                                // what survives.
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(theme::get_deletion_warning(), "⚠");
+                                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                                    ui.label(t!(kind.warning_key()));
+                                });
+
+                                ui.add_space(12.0);
+
+                                // Force flag: the remedy for 409 "in use" errors.
+                                ui.checkbox(
+                                    &mut self.docker_view.delete_force,
+                                    t!("docker-delete-force"),
+                                )
+                                .on_hover_text(t!(kind.force_hover_key()));
+
+                                ui.add_space(16.0);
+
+                                // Action Buttons
+                                ui.horizontal(|ui| {
+                                    if ui.button(t!("modal-cancel-btn")).clicked() {
+                                        self.active_modal = None;
+                                    }
+
+                                    let confirm_btn = egui::Button::new(
+                                        egui::RichText::new(t!("modal-delete-confirm"))
+                                            .color(theme::COLOR_WHITE)
+                                            .strong(),
+                                    )
+                                    .fill(theme::get_deletion_border());
+
+                                    let confirm_res = ui.add_enabled(crate::IS_NATIVE, confirm_btn);
+                                    let confirm_res = if crate::IS_NATIVE {
+                                        confirm_res
+                                    } else {
+                                        confirm_res.on_disabled_hover_text(t!("web-not-available"))
+                                    };
+                                    if confirm_res.clicked() {
+                                        self.start_docker_resource_deletion(
+                                            targets.clone(),
+                                            self.docker_view.delete_force,
+                                            ctx,
+                                        );
+                                        self.active_modal = None;
+                                    }
+                                });
                             });
                         });
                 });
@@ -2584,6 +2767,7 @@ impl GuiApp {
                 nodes: Arc::new(NodeStorage::Owned(cloned_nodes)),
                 string_pool: Arc::new(string_pool),
                 dir_counts,
+                extensions: current_snap.extensions.clone(),
             };
             state.store_snapshot(new_snapshot);
 
@@ -2833,6 +3017,7 @@ mod tests {
         let dir_counts = crate::arena::precompute_dir_counts(&nodes);
         let shared_state = Arc::new(SharedState::new());
         shared_state.store_snapshot(FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(crate::arena::NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(dir_counts),
@@ -2943,6 +3128,7 @@ mod tests {
         )];
         let dir_counts = crate::arena::precompute_dir_counts(&nodes);
         let snapshot = FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(crate::arena::NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(dir_counts),
@@ -3071,6 +3257,7 @@ mod tests {
         let dir_counts = crate::arena::precompute_dir_counts(&nodes);
         let shared_state = Arc::new(SharedState::new());
         shared_state.store_snapshot(FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(crate::arena::NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(dir_counts),

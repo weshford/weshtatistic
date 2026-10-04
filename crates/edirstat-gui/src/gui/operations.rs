@@ -41,6 +41,14 @@ pub enum AppCommand {
     ScrollToSelected,
     ShowTrashModal(Vec<u32>),
     ShowDeleteModal(Vec<u32>),
+    /// Re-collect the docker inventory through the (preferred-source)
+    /// collector (`DockerRefreshOp`).
+    RefreshDockerInventory,
+    /// Open the shared Docker resource deletion confirmation modal (dispatched
+    /// by the `DockerDelete*Op`s; the existing modal + background deletion
+    /// state machine execute the actual deletion). Carries every selected row
+    /// of the op's table.
+    ShowDockerDeleteResourceModal(Vec<crate::gui::docker::DockerDeleteTarget>),
     BackgroundOpCompleted(BackgroundOpResult),
     ZoomTreemap(u32),
     /// A snapshot file picked in the browser, delivered as raw bytes
@@ -726,9 +734,930 @@ impl TableOperation for DeleteSelectedOp {
     }
 }
 
+// --- Refresh Docker inventory (Docker tab toolbar) ---
+/// Re-collects the Docker inventory through the collector's preferred source
+/// (daemon API first, disk fallback).
+///
+/// The tab's Refresh/Analyze action, rendered as a toolbar op like the
+/// explorer's refresh ops. Scoped to the docker tables by `TableState::id`
+/// (any of the three sub-tables; the op is section-agnostic), native-only,
+/// blocked while a collection runs, and requiring a live collector.
+pub struct DockerRefreshOp {
+    command_tx: Sender<AppCommand>,
+    scanner: Option<Arc<dyn crate::ScanController>>,
+    collection_running: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl std::fmt::Debug for DockerRefreshOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `dyn ScanController` is not Debug; the flag is the interesting part.
+        f.debug_struct("DockerRefreshOp")
+            .field(
+                "collection_running",
+                &self
+                    .collection_running
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl DockerRefreshOp {
+    #[must_use]
+    pub const fn new(
+        command_tx: Sender<AppCommand>,
+        scanner: Option<Arc<dyn crate::ScanController>>,
+        collection_running: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        Self {
+            command_tx,
+            scanner,
+            collection_running,
+        }
+    }
+
+    /// True when `state` is one of the docker sub-table states (refresh is
+    /// section-agnostic, but must never light up on the explorer table).
+    fn is_docker_table(state: &egui_table_kit::state::TableState) -> bool {
+        matches!(
+            state.id.as_str(),
+            crate::gui::docker::DOCKER_IMAGES_TABLE_ID
+                | crate::gui::docker::DOCKER_CONTAINERS_TABLE_ID
+                | crate::gui::docker::DOCKER_VOLUMES_TABLE_ID
+        )
+    }
+}
+
+impl TableOperation for DockerRefreshOp {
+    fn name(&self) -> Cow<'_, str> {
+        t!("docker-refresh")
+    }
+
+    fn icon(&self) -> &'static str {
+        // Same glyph as `RefreshDirectoryOp`, for consistency.
+        "🔄"
+    }
+
+    fn enabled(&self) -> TableOperationEnablement {
+        TableOperationEnablement::Always
+    }
+
+    fn evaluate_enablement(
+        &self,
+        state: &egui_table_kit::state::TableState,
+    ) -> (bool, Cow<'static, str>) {
+        if !Self::is_docker_table(state) {
+            return (false, t!("operation-at-least-one-filtered"));
+        }
+        if !crate::IS_NATIVE {
+            return (false, t!("web-not-available"));
+        }
+        if self
+            .collection_running
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return (false, t!("docker-analyzing"));
+        }
+        if self
+            .scanner
+            .as_ref()
+            .is_none_or(|scanner| scanner.docker_collector().is_none())
+        {
+            return (false, t!("docker-no-install"));
+        }
+        (true, Cow::Borrowed(""))
+    }
+
+    fn exec(&mut self, ctx: &mut OperationContext<'_, '_>) -> Result<(), TableError> {
+        if !Self::is_docker_table(ctx.data) {
+            return Ok(());
+        }
+        let _ = self.command_tx.send(AppCommand::RefreshDockerInventory);
+        Ok(())
+    }
+}
+
+// --- Delete Docker resources (Docker tab > sub-tables) ---
+/// Shared enablement of the docker delete ops: hard-scoped to the resource's
+/// sub-table by `TableState::id`, native-only, blocked while any deletion
+/// runs, and requiring at least one selected row.
+fn docker_delete_enablement(
+    kind: crate::gui::docker::DockerResourceKind,
+    state: &egui_table_kit::state::TableState,
+    deletion_running: &std::sync::atomic::AtomicBool,
+    scanner: Option<&Arc<dyn crate::ScanController>>,
+) -> (bool, Cow<'static, str>) {
+    if state.id != kind.table_id() {
+        return (false, t!("operation-one"));
+    }
+    if !crate::IS_NATIVE {
+        return (false, t!("web-not-available"));
+    }
+    if deletion_running.load(std::sync::atomic::Ordering::Acquire) {
+        return (false, t!(kind.busy_key()));
+    }
+    if scanner.is_none_or(|scanner| scanner.docker_collector().is_none()) {
+        return (false, t!("docker-no-install"));
+    }
+    (
+        !state.selected_rows.is_empty(),
+        t!("operation-at-least-one"),
+    )
+}
+
+/// Shared exec tail of the docker delete ops: resolves the display data of
+/// every selected row from the snapshot-carried inventory and asks the app
+/// to open the shared deletion confirmation modal. `keys` are the daemon
+/// keys extracted from the selected rows (image/container IDs, or volume
+/// names).
+fn docker_delete_request_modal(
+    shared_state: &Arc<SharedState>,
+    command_tx: &Sender<AppCommand>,
+    kind: crate::gui::docker::DockerResourceKind,
+    keys: &[String],
+) {
+    let Some(inventory) = get_snapshot(shared_state).docker_inventory() else {
+        return;
+    };
+    let targets: Vec<crate::gui::docker::DockerDeleteTarget> = keys
+        .iter()
+        .filter_map(|key| crate::gui::docker::DockerDeleteTarget::resolve(kind, key, &inventory))
+        .collect();
+    if !targets.is_empty() {
+        let _ = command_tx.send(AppCommand::ShowDockerDeleteResourceModal(targets));
+    }
+}
+
+macro_rules! docker_delete_op {
+    ($op:ident, $kind:ident, $doc:literal) => {
+        #[doc = $doc]
+        ///
+        /// Scoped to its sub-table twice over: it lives in the docker-scoped
+        /// `TableOperations` registry (rendered only from the docker toolbar
+        /// and context menu), and its enablement/exec gate on the table's
+        /// `TableState::id`. Execution asks the app to open the shared
+        /// `ActiveModal::DockerDeleteResource` confirmation modal; the
+        /// background `DockerDeletionState` machine performs the deletion.
+        pub struct $op {
+            shared_state: Arc<SharedState>,
+            command_tx: Sender<AppCommand>,
+            scanner: Option<Arc<dyn crate::ScanController>>,
+            deletion_running: Arc<std::sync::atomic::AtomicBool>,
+        }
+
+        impl std::fmt::Debug for $op {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                // `dyn ScanController` is not Debug; the flag is the
+                // interesting part.
+                f.debug_struct(stringify!($op))
+                    .field(
+                        "deletion_running",
+                        &self
+                            .deletion_running
+                            .load(std::sync::atomic::Ordering::Acquire),
+                    )
+                    .finish_non_exhaustive()
+            }
+        }
+
+        impl $op {
+            #[must_use]
+            pub const fn new(
+                shared_state: Arc<SharedState>,
+                command_tx: Sender<AppCommand>,
+                scanner: Option<Arc<dyn crate::ScanController>>,
+                deletion_running: Arc<std::sync::atomic::AtomicBool>,
+            ) -> Self {
+                Self {
+                    shared_state,
+                    command_tx,
+                    scanner,
+                    deletion_running,
+                }
+            }
+        }
+
+        impl TableOperation for $op {
+            fn name(&self) -> Cow<'_, str> {
+                t!(crate::gui::docker::DockerResourceKind::$kind.title_key())
+            }
+
+            fn icon(&self) -> &'static str {
+                "🗑"
+            }
+
+            fn enabled(&self) -> TableOperationEnablement {
+                TableOperationEnablement::AtLeastOneSelected
+            }
+
+            fn evaluate_enablement(
+                &self,
+                state: &egui_table_kit::state::TableState,
+            ) -> (bool, Cow<'static, str>) {
+                docker_delete_enablement(
+                    crate::gui::docker::DockerResourceKind::$kind,
+                    state,
+                    &self.deletion_running,
+                    self.scanner.as_ref(),
+                )
+            }
+
+            fn exec(&mut self, ctx: &mut OperationContext<'_, '_>) -> Result<(), TableError> {
+                Self::exec_kind(&self.shared_state, &self.command_tx, ctx)
+            }
+        }
+
+        impl $op {
+            /// Resource-specific exec: extracts the daemon key from the first
+            /// selected row, then shares the modal request with the siblings.
+            fn exec_kind(
+                shared_state: &Arc<SharedState>,
+                command_tx: &Sender<AppCommand>,
+                ctx: &mut OperationContext<'_, '_>,
+            ) -> Result<(), TableError> {
+                let kind = crate::gui::docker::DockerResourceKind::$kind;
+                if ctx.data.id != kind.table_id() {
+                    return Ok(());
+                }
+
+                // Multi-select delete: every selected row joins the batch.
+                let keys = ctx.provider.map_selected_rows(ctx.data, Self::row_key)?;
+                docker_delete_request_modal(shared_state, command_tx, kind, &keys);
+                Ok(())
+            }
+        }
+    };
+}
+
+docker_delete_op!(
+    DockerDeleteImageOp,
+    Image,
+    "Deletes the selected image of the Docker tab's Images table."
+);
+
+impl DockerDeleteImageOp {
+    /// The full image ID rides in the ID column's hover text.
+    fn row_key(row: &dyn egui_table_kit::operations::Row) -> Result<String, TableError> {
+        use egui_table_kit::operations::RowSliceExt as _;
+        row.get_hover(crate::gui::docker::DOCKER_COL_ID)
+            .map(std::borrow::Cow::into_owned)
+    }
+}
+
+docker_delete_op!(
+    DockerDeleteContainerOp,
+    Container,
+    "Deletes the selected container of the Docker tab's Containers table."
+);
+
+impl DockerDeleteContainerOp {
+    /// The full container ID rides in the ID column's hover text.
+    fn row_key(row: &dyn egui_table_kit::operations::Row) -> Result<String, TableError> {
+        use egui_table_kit::operations::RowSliceExt as _;
+        row.get_hover(crate::gui::docker::DOCKER_COL_ID)
+            .map(std::borrow::Cow::into_owned)
+    }
+}
+
+docker_delete_op!(
+    DockerDeleteVolumeOp,
+    Volume,
+    "Deletes the selected volume of the Docker tab's Volumes table."
+);
+
+impl DockerDeleteVolumeOp {
+    /// The volume name (the daemon key) is the name column's primary text.
+    fn row_key(row: &dyn egui_table_kit::operations::Row) -> Result<String, TableError> {
+        use egui_table_kit::operations::RowSliceExt as _;
+        row.get_primary(crate::gui::docker::DOCKER_VOLUME_COL_NAME)
+            .map(std::borrow::Cow::into_owned)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+
+    use eframe::egui;
+
     use super::*;
+
+    struct NoopCollector;
+    impl crate::docker::DockerCollector for NoopCollector {
+        fn detect_environment(&self) -> crate::docker::DockerEnvironment {
+            crate::docker::DockerEnvironment::default()
+        }
+
+        fn collect_inventory(
+            &self,
+            _cancel: &AtomicBool,
+        ) -> Result<crate::docker::DockerInventory, crate::EdirstatError> {
+            Err(crate::EdirstatError::Io(std::io::Error::from(
+                std::io::ErrorKind::Unsupported,
+            )))
+        }
+    }
+
+    struct DockerScanner;
+    impl crate::ScanController for DockerScanner {
+        fn start_scan(&self, _path: std::path::PathBuf, _same_filesystem: bool) {}
+        fn num_threads(&self) -> usize {
+            1
+        }
+        fn docker_collector(&self) -> Option<Arc<dyn crate::docker::DockerCollector>> {
+            Some(Arc::new(NoopCollector))
+        }
+    }
+
+    fn docker_table_with_selection(
+        table_id: &str,
+        selected: &[u32],
+    ) -> egui_table_kit::state::TableState {
+        let mut state = egui_table_kit::state::TableState::new(table_id, 2);
+        for &row in selected {
+            state.selected_rows.insert(row);
+        }
+        state
+    }
+
+    /// Publishes a snapshot carrying `inventory` as the docker extension.
+    fn shared_with_inventory(
+        inventory: &crate::docker::DockerInventory,
+    ) -> Result<Arc<SharedState>, TableError> {
+        let payload = inventory
+            .to_extension_payload()
+            .map_err(|err| TableError::Generic(err.to_string()))?;
+        let mut snapshot = crate::arena::FileArenaSnapshot {
+            nodes: Arc::new(crate::arena::NodeStorage::Owned(Vec::new())),
+            string_pool: Arc::new(crate::arena::StringPool::new()),
+            dir_counts: Arc::new(Vec::new()),
+            extensions: crate::extensions::ExtensionStore::default(),
+        };
+        snapshot.extensions.insert(
+            crate::extensions::EXT_DOCKER_INVENTORY,
+            crate::extensions::EXT_DOCKER_INVENTORY_VERSION,
+            payload.into(),
+        );
+        let shared = Arc::new(SharedState::new());
+        shared.store_snapshot(snapshot);
+        Ok(shared)
+    }
+
+    /// Runs `op.exec` headlessly against the given table/provider.
+    fn exec_op(
+        op: &mut impl TableOperation,
+        provider: &crate::gui::docker::DockerImagesProvider<'_>,
+        state: &mut egui_table_kit::state::TableState,
+    ) {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut op_ctx = OperationContext {
+                ui,
+                data: state,
+                provider,
+            };
+            let _ = op.exec(&mut op_ctx);
+        });
+        output.textures_delta.clear();
+    }
+
+    /// The inventory the docker op exec tests resolve against: two entries
+    /// per section so multi-select payloads can be asserted.
+    fn op_test_inventory() -> crate::docker::DockerInventory {
+        crate::docker::DockerInventory {
+            images: vec![
+                crate::docker::ImageInfo {
+                    id: "img1".to_string(),
+                    tags: vec!["repo:tag".to_string()],
+                    size_bytes: 42,
+                    ..crate::docker::ImageInfo::default()
+                },
+                crate::docker::ImageInfo {
+                    id: "img2".to_string(),
+                    tags: vec!["repo:tag2".to_string()],
+                    size_bytes: 43,
+                    ..crate::docker::ImageInfo::default()
+                },
+            ],
+            containers: vec![
+                crate::docker::ContainerInfo {
+                    id: "ctr1".to_string(),
+                    name: "ctr-one".to_string(),
+                    image_id: None,
+                    rw_size_bytes: 25,
+                    log_bytes: 15,
+                    created: 0,
+                },
+                crate::docker::ContainerInfo {
+                    id: "ctr2".to_string(),
+                    name: "ctr-two".to_string(),
+                    image_id: None,
+                    rw_size_bytes: 35,
+                    log_bytes: 5,
+                    created: 0,
+                },
+            ],
+            volumes: vec![
+                crate::docker::VolumeInfo {
+                    name: "vol1".to_string(),
+                    size_bytes: 30,
+                    ref_count: 0,
+                    created: 0,
+                },
+                crate::docker::VolumeInfo {
+                    name: "vol2".to_string(),
+                    size_bytes: 40,
+                    ref_count: 1,
+                    created: 0,
+                },
+            ],
+            ..crate::docker::DockerInventory::default()
+        }
+    }
+
+    #[test]
+    fn docker_refresh_op_enablement_is_scoped() {
+        use crate::gui::docker::{
+            DOCKER_CONTAINERS_TABLE_ID, DOCKER_IMAGES_TABLE_ID, DOCKER_VOLUMES_TABLE_ID,
+        };
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let idle = Arc::new(AtomicBool::new(false));
+        let op = DockerRefreshOp::new(tx, Some(Arc::new(DockerScanner)), idle);
+
+        // Section-agnostic: every docker sub-table state enables it.
+        for table in [
+            DOCKER_IMAGES_TABLE_ID,
+            DOCKER_CONTAINERS_TABLE_ID,
+            DOCKER_VOLUMES_TABLE_ID,
+        ] {
+            assert!(
+                op.evaluate_enablement(&docker_table_with_selection(table, &[]))
+                    .0,
+                "refresh must be enabled on {table} without a selection"
+            );
+        }
+
+        // The explorer table must never enable it.
+        let explorer = egui_table_kit::state::TableState::new("edirstat_hierarchical_table", 0);
+        assert!(!op.evaluate_enablement(&explorer).0);
+
+        // No collector (native snapshot viewer): disabled.
+        let no_collector = DockerRefreshOp::new(
+            std::sync::mpsc::channel().0,
+            None,
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert!(
+            !no_collector
+                .evaluate_enablement(&docker_table_with_selection(DOCKER_IMAGES_TABLE_ID, &[]))
+                .0
+        );
+
+        // A running collection disables it with the busy reason.
+        let busy = DockerRefreshOp::new(
+            std::sync::mpsc::channel().0,
+            Some(Arc::new(DockerScanner)),
+            Arc::new(AtomicBool::new(true)),
+        );
+        let (enabled, reason) =
+            busy.evaluate_enablement(&docker_table_with_selection(DOCKER_IMAGES_TABLE_ID, &[]));
+        assert!(!enabled);
+        assert_eq!(reason, t!("docker-analyzing"));
+    }
+
+    #[test]
+    fn docker_refresh_op_exec_issues_refresh_command() -> Result<(), TableError> {
+        let inventory = op_test_inventory();
+        let provider = crate::gui::docker::DockerImagesProvider::new(
+            &inventory,
+            crate::gui::docker::DockerSection::Images,
+            crate::time_utils::TimeFormat::default(),
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut op = DockerRefreshOp::new(
+            tx,
+            Some(Arc::new(DockerScanner)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let mut state =
+            docker_table_with_selection(crate::gui::docker::DOCKER_IMAGES_TABLE_ID, &[]);
+        exec_op(&mut op, &provider, &mut state);
+
+        let command = rx
+            .try_recv()
+            .map_err(|err| TableError::Generic(err.to_string()))?;
+        assert!(
+            matches!(command, AppCommand::RefreshDockerInventory),
+            "unexpected command: {command:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn docker_refresh_op_exec_ignores_foreign_table() {
+        let inventory = op_test_inventory();
+        let provider = crate::gui::docker::DockerImagesProvider::new(
+            &inventory,
+            crate::gui::docker::DockerSection::Images,
+            crate::time_utils::TimeFormat::default(),
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut op = DockerRefreshOp::new(
+            tx,
+            Some(Arc::new(DockerScanner)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let mut foreign = docker_table_with_selection("edirstat_hierarchical_table", &[]);
+        exec_op(&mut op, &provider, &mut foreign);
+        assert!(
+            rx.try_recv().is_err(),
+            "exec against a foreign table must not emit a refresh command"
+        );
+    }
+
+    #[test]
+    fn docker_delete_image_op_enablement_is_scoped() {
+        use crate::gui::docker::{
+            DOCKER_CONTAINERS_TABLE_ID, DOCKER_IMAGES_TABLE_ID, DOCKER_VOLUMES_TABLE_ID,
+        };
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let idle = Arc::new(AtomicBool::new(false));
+        let op = DockerDeleteImageOp::new(
+            Arc::new(SharedState::new()),
+            tx.clone(),
+            Some(Arc::new(DockerScanner)),
+            idle,
+        );
+
+        // Wrong table: disabled even with a valid selection (the op must
+        // never light up on the primary explorer table nor the sibling
+        // docker tables).
+        let mut foreign = egui_table_kit::state::TableState::new("edirstat_hierarchical_table", 2);
+        foreign.selected_rows.insert(0);
+        assert!(!op.evaluate_enablement(&foreign).0);
+        assert!(
+            !op.evaluate_enablement(&docker_table_with_selection(
+                DOCKER_CONTAINERS_TABLE_ID,
+                &[0]
+            ))
+            .0
+        );
+        assert!(
+            !op.evaluate_enablement(&docker_table_with_selection(DOCKER_VOLUMES_TABLE_ID, &[0]))
+                .0
+        );
+
+        // Own table, exactly one selected: enabled.
+        assert!(
+            op.evaluate_enablement(&docker_table_with_selection(DOCKER_IMAGES_TABLE_ID, &[0]))
+                .0
+        );
+
+        // Multi-select delete: several selected rows stay enabled.
+        assert!(
+            op.evaluate_enablement(&docker_table_with_selection(
+                DOCKER_IMAGES_TABLE_ID,
+                &[0, 1]
+            ))
+            .0
+        );
+
+        // Empty selection: disabled.
+        assert!(
+            !op.evaluate_enablement(&docker_table_with_selection(DOCKER_IMAGES_TABLE_ID, &[]))
+                .0
+        );
+
+        // No collector (native snapshot viewer): disabled.
+        let no_collector = DockerDeleteImageOp::new(
+            Arc::new(SharedState::new()),
+            tx,
+            None,
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert!(
+            !no_collector
+                .evaluate_enablement(&docker_table_with_selection(DOCKER_IMAGES_TABLE_ID, &[0]))
+                .0
+        );
+
+        // A running deletion disables the op with the busy reason.
+        let busy = DockerDeleteImageOp::new(
+            Arc::new(SharedState::new()),
+            std::sync::mpsc::channel().0,
+            Some(Arc::new(DockerScanner)),
+            Arc::new(AtomicBool::new(true)),
+        );
+        let (enabled, reason) =
+            busy.evaluate_enablement(&docker_table_with_selection(DOCKER_IMAGES_TABLE_ID, &[0]));
+        assert!(!enabled);
+        assert_eq!(reason, t!("docker-deleting"));
+    }
+
+    #[test]
+    fn docker_delete_container_op_enablement_is_scoped() {
+        use crate::gui::docker::{
+            DOCKER_CONTAINERS_TABLE_ID, DOCKER_IMAGES_TABLE_ID, DOCKER_VOLUMES_TABLE_ID,
+        };
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let op = DockerDeleteContainerOp::new(
+            Arc::new(SharedState::new()),
+            tx,
+            Some(Arc::new(DockerScanner)),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        // Own table, exactly one selected: enabled.
+        assert!(
+            op.evaluate_enablement(&docker_table_with_selection(
+                DOCKER_CONTAINERS_TABLE_ID,
+                &[0]
+            ))
+            .0
+        );
+
+        // Sibling docker tables and the explorer table: disabled.
+        assert!(
+            !op.evaluate_enablement(&docker_table_with_selection(DOCKER_IMAGES_TABLE_ID, &[0]))
+                .0
+        );
+        assert!(
+            !op.evaluate_enablement(&docker_table_with_selection(DOCKER_VOLUMES_TABLE_ID, &[0]))
+                .0
+        );
+        let mut foreign = egui_table_kit::state::TableState::new("edirstat_hierarchical_table", 2);
+        foreign.selected_rows.insert(0);
+        assert!(!op.evaluate_enablement(&foreign).0);
+
+        // Selection count and busy flag behave like the image op's.
+        assert!(
+            !op.evaluate_enablement(&docker_table_with_selection(
+                DOCKER_CONTAINERS_TABLE_ID,
+                &[]
+            ))
+            .0
+        );
+        assert!(
+            op.evaluate_enablement(&docker_table_with_selection(
+                DOCKER_CONTAINERS_TABLE_ID,
+                &[0, 1]
+            ))
+            .0
+        );
+        let busy = DockerDeleteContainerOp::new(
+            Arc::new(SharedState::new()),
+            std::sync::mpsc::channel().0,
+            Some(Arc::new(DockerScanner)),
+            Arc::new(AtomicBool::new(true)),
+        );
+        let (enabled, reason) = busy.evaluate_enablement(&docker_table_with_selection(
+            DOCKER_CONTAINERS_TABLE_ID,
+            &[0],
+        ));
+        assert!(!enabled);
+        assert_eq!(reason, t!("docker-deleting-container"));
+    }
+
+    #[test]
+    fn docker_delete_volume_op_enablement_is_scoped() {
+        use crate::gui::docker::{
+            DOCKER_CONTAINERS_TABLE_ID, DOCKER_IMAGES_TABLE_ID, DOCKER_VOLUMES_TABLE_ID,
+        };
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let op = DockerDeleteVolumeOp::new(
+            Arc::new(SharedState::new()),
+            tx,
+            Some(Arc::new(DockerScanner)),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        // Own table, exactly one selected: enabled.
+        assert!(
+            op.evaluate_enablement(&docker_table_with_selection(DOCKER_VOLUMES_TABLE_ID, &[0]))
+                .0
+        );
+
+        // Sibling docker tables: disabled.
+        assert!(
+            !op.evaluate_enablement(&docker_table_with_selection(DOCKER_IMAGES_TABLE_ID, &[0]))
+                .0
+        );
+        assert!(
+            !op.evaluate_enablement(&docker_table_with_selection(
+                DOCKER_CONTAINERS_TABLE_ID,
+                &[0]
+            ))
+            .0
+        );
+
+        let busy = DockerDeleteVolumeOp::new(
+            Arc::new(SharedState::new()),
+            std::sync::mpsc::channel().0,
+            Some(Arc::new(DockerScanner)),
+            Arc::new(AtomicBool::new(true)),
+        );
+        let (enabled, reason) =
+            busy.evaluate_enablement(&docker_table_with_selection(DOCKER_VOLUMES_TABLE_ID, &[0]));
+        assert!(!enabled);
+        assert_eq!(reason, t!("docker-deleting-volume"));
+    }
+
+    /// Asserts that `op.exec` against the given table emits exactly one
+    /// `ShowDockerDeleteResourceModal` carrying the expected targets.
+    fn assert_exec_requests_modal(
+        op: &mut impl TableOperation,
+        provider: &crate::gui::docker::DockerImagesProvider<'_>,
+        table_id: &str,
+        selected: &[u32],
+        rx: &std::sync::mpsc::Receiver<AppCommand>,
+        expect: &[crate::gui::docker::DockerDeleteTarget],
+    ) -> Result<(), TableError> {
+        let mut state = docker_table_with_selection(table_id, selected);
+        exec_op(op, provider, &mut state);
+
+        let command = rx
+            .try_recv()
+            .map_err(|err| TableError::Generic(err.to_string()))?;
+        let debug = format!("{command:?}");
+        let AppCommand::ShowDockerDeleteResourceModal(targets) = command else {
+            return Err(TableError::Generic(debug));
+        };
+        assert_eq!(targets, expect);
+        Ok(())
+    }
+
+    #[test]
+    fn docker_delete_image_op_exec_requests_modal() -> Result<(), TableError> {
+        let inventory = op_test_inventory();
+        let shared = shared_with_inventory(&inventory)?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut op = DockerDeleteImageOp::new(
+            shared,
+            tx,
+            Some(Arc::new(DockerScanner)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let provider = crate::gui::docker::DockerImagesProvider::new(
+            &inventory,
+            crate::gui::docker::DockerSection::Images,
+            crate::time_utils::TimeFormat::default(),
+        );
+
+        assert_exec_requests_modal(
+            &mut op,
+            &provider,
+            crate::gui::docker::DOCKER_IMAGES_TABLE_ID,
+            &[0],
+            &rx,
+            &[crate::gui::docker::DockerDeleteTarget {
+                kind: crate::gui::docker::DockerResourceKind::Image,
+                id: "img1".to_string(),
+                name: "repo:tag".to_string(),
+                size_bytes: 42,
+                extra_bytes: 0,
+            }],
+        )
+    }
+
+    #[test]
+    fn docker_delete_image_op_exec_carries_all_selected_rows() -> Result<(), TableError> {
+        let inventory = op_test_inventory();
+        let shared = shared_with_inventory(&inventory)?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut op = DockerDeleteImageOp::new(
+            shared,
+            tx,
+            Some(Arc::new(DockerScanner)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let provider = crate::gui::docker::DockerImagesProvider::new(
+            &inventory,
+            crate::gui::docker::DockerSection::Images,
+            crate::time_utils::TimeFormat::default(),
+        );
+
+        // Multi-select: both rows join the batch in selection order.
+        assert_exec_requests_modal(
+            &mut op,
+            &provider,
+            crate::gui::docker::DOCKER_IMAGES_TABLE_ID,
+            &[0, 1],
+            &rx,
+            &[
+                crate::gui::docker::DockerDeleteTarget {
+                    kind: crate::gui::docker::DockerResourceKind::Image,
+                    id: "img1".to_string(),
+                    name: "repo:tag".to_string(),
+                    size_bytes: 42,
+                    extra_bytes: 0,
+                },
+                crate::gui::docker::DockerDeleteTarget {
+                    kind: crate::gui::docker::DockerResourceKind::Image,
+                    id: "img2".to_string(),
+                    name: "repo:tag2".to_string(),
+                    size_bytes: 43,
+                    extra_bytes: 0,
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn docker_delete_container_op_exec_requests_modal() -> Result<(), TableError> {
+        let inventory = op_test_inventory();
+        let shared = shared_with_inventory(&inventory)?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut op = DockerDeleteContainerOp::new(
+            shared,
+            tx,
+            Some(Arc::new(DockerScanner)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let provider = crate::gui::docker::DockerImagesProvider::new(
+            &inventory,
+            crate::gui::docker::DockerSection::Containers,
+            crate::time_utils::TimeFormat::default(),
+        );
+
+        // The modal carries the container name plus rw/log sizes.
+        assert_exec_requests_modal(
+            &mut op,
+            &provider,
+            crate::gui::docker::DOCKER_CONTAINERS_TABLE_ID,
+            &[0],
+            &rx,
+            &[crate::gui::docker::DockerDeleteTarget {
+                kind: crate::gui::docker::DockerResourceKind::Container,
+                id: "ctr1".to_string(),
+                name: "ctr-one".to_string(),
+                size_bytes: 25,
+                extra_bytes: 15,
+            }],
+        )
+    }
+
+    #[test]
+    fn docker_delete_volume_op_exec_requests_modal() -> Result<(), TableError> {
+        let inventory = op_test_inventory();
+        let shared = shared_with_inventory(&inventory)?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut op = DockerDeleteVolumeOp::new(
+            shared,
+            tx,
+            Some(Arc::new(DockerScanner)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let provider = crate::gui::docker::DockerImagesProvider::new(
+            &inventory,
+            crate::gui::docker::DockerSection::Volumes,
+            crate::time_utils::TimeFormat::default(),
+        );
+
+        assert_exec_requests_modal(
+            &mut op,
+            &provider,
+            crate::gui::docker::DOCKER_VOLUMES_TABLE_ID,
+            &[0],
+            &rx,
+            &[crate::gui::docker::DockerDeleteTarget {
+                kind: crate::gui::docker::DockerResourceKind::Volume,
+                id: "vol1".to_string(),
+                name: "vol1".to_string(),
+                size_bytes: 30,
+                extra_bytes: 0,
+            }],
+        )
+    }
+
+    #[test]
+    fn docker_delete_image_op_exec_ignores_foreign_table() -> Result<(), TableError> {
+        let inventory = op_test_inventory();
+        let shared = shared_with_inventory(&inventory)?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut op = DockerDeleteImageOp::new(
+            shared,
+            tx,
+            Some(Arc::new(DockerScanner)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let provider = crate::gui::docker::DockerImagesProvider::new(
+            &inventory,
+            crate::gui::docker::DockerSection::Images,
+            crate::time_utils::TimeFormat::default(),
+        );
+        let mut foreign =
+            docker_table_with_selection(crate::gui::docker::DOCKER_CONTAINERS_TABLE_ID, &[0]);
+        exec_op(&mut op, &provider, &mut foreign);
+        assert!(
+            rx.try_recv().is_err(),
+            "exec against a foreign table must not emit a modal command"
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_macos_appstore_detection() {

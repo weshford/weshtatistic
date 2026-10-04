@@ -1072,6 +1072,7 @@ mod tests {
     fn test_treemap_compute_empty() {
         let pool = StringPool::new();
         let snapshot = FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(NodeStorage::Owned(vec![])),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(vec![]),
@@ -1098,6 +1099,7 @@ mod tests {
 
         let dir_counts = precompute_dir_counts(&nodes);
         let snapshot = FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(dir_counts),
@@ -1146,6 +1148,7 @@ mod tests {
 
         let dir_counts = precompute_dir_counts(&nodes);
         let snapshot = FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(dir_counts),
@@ -1180,6 +1183,7 @@ mod tests {
 
         let dir_counts = precompute_dir_counts(&nodes);
         let snapshot = FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(dir_counts),
@@ -1223,6 +1227,7 @@ mod tests {
 
         let dir_counts = precompute_dir_counts(&nodes);
         let snapshot = FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(dir_counts),
@@ -1327,6 +1332,7 @@ mod tests {
 
         let dir_counts = precompute_dir_counts(&nodes);
         let snapshot = FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(dir_counts),
@@ -1375,6 +1381,7 @@ mod tests {
 
         let dir_counts = precompute_dir_counts(&nodes);
         let snapshot = FileArenaSnapshot {
+            extensions: crate::extensions::ExtensionStore::default(),
             nodes: Arc::new(NodeStorage::Owned(nodes)),
             string_pool: Arc::new(pool),
             dir_counts: Arc::new(dir_counts),

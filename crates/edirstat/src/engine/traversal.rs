@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -136,6 +137,11 @@ impl TraversalEngine {
             // Setup global injector for starting and overflow tasks
             let injector = Arc::new(Injector::new());
 
+            // Overlay filesystem mountpoints (e.g. a running container's
+            // `overlay2/<id>/merged`) duplicate bytes already counted under
+            // `diff/`; workers show them as empty nodes without descending.
+            let overlay_mounts = super::mounts::load_overlay_mounts();
+
             // Build initial scan task
             let root_id = (0, 0); // Placeholder for root
             let root_metadata = fs::metadata(&root_path);
@@ -195,6 +201,7 @@ impl TraversalEngine {
                 let done = done.clone();
                 let event_tx = event_tx.clone();
                 let scan_cancel = scan_cancel.clone();
+                let overlay_mounts = overlay_mounts.clone();
 
                 let stats = stats.clone();
 
@@ -206,6 +213,7 @@ impl TraversalEngine {
                         &stats,
                         &scan_cancel,
                         &in_flight_tasks,
+                        &overlay_mounts,
                     );
 
                     loop {
@@ -290,6 +298,7 @@ struct WorkerContext<'a> {
     stats: &'a TraversalStats,
     scan_cancel: &'a Arc<AtomicBool>,
     in_flight_tasks: &'a AtomicUsize,
+    overlay_mounts: &'a HashSet<PathBuf>,
 }
 
 impl<'a> WorkerContext<'a> {
@@ -300,6 +309,7 @@ impl<'a> WorkerContext<'a> {
         stats: &'a TraversalStats,
         scan_cancel: &'a Arc<AtomicBool>,
         in_flight_tasks: &'a AtomicUsize,
+        overlay_mounts: &'a HashSet<PathBuf>,
     ) -> Self {
         Self {
             worker_id,
@@ -310,6 +320,7 @@ impl<'a> WorkerContext<'a> {
             stats,
             scan_cancel,
             in_flight_tasks,
+            overlay_mounts,
         }
     }
 
@@ -411,6 +422,18 @@ fn scan_directory(task: &ScanTask, ctx: &mut WorkerContext<'_>) {
                 true,
             );
 
+            // Overlay mountpoints (e.g. a running container's `…/merged`)
+            // duplicate bytes already counted under the layer `diff/` dirs.
+            // The node stays visible (size 0) but no scan task is queued.
+            // Discovered directories are never the traversal root itself, so
+            // an explicit root scan of a mountpoint is unaffected.
+            let child_path = entry.path();
+            if !ctx.overlay_mounts.is_empty()
+                && super::mounts::is_overlay_mountpoint(ctx.overlay_mounts, &child_path)
+            {
+                continue;
+            }
+
             // Create a new task and push to local queue
             let mut new_ancestors = task.ancestors.clone();
             if meta.file_id != (0, 0) {
@@ -418,7 +441,7 @@ fn scan_directory(task: &ScanTask, ctx: &mut WorkerContext<'_>) {
             }
 
             let new_task = ScanTask {
-                path: entry.path(),
+                path: child_path,
                 parent_id: child_local_id,
                 worker_id: ctx.worker_id,
                 ancestors: new_ancestors,

@@ -29,11 +29,15 @@
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
+    sync::atomic::AtomicBool,
 };
 
 use clap::Parser;
 use edirstat::{
-    coordinator::SharedState, engine::scanner::EngineScanController, gui::GuiApp,
+    coordinator::SharedState,
+    engine::scanner::EngineScanController,
+    extensions::{EXT_DOCKER_INVENTORY, EXT_DOCKER_INVENTORY_VERSION, ExtensionStore},
+    gui::{GuiApp, docker::DockerCollector},
     traversal::TraversalEngine,
 };
 
@@ -42,6 +46,7 @@ static GLOBAL: mimalloc_rspack::MiMalloc = mimalloc_rspack::MiMalloc;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
+#[allow(clippy::struct_excessive_bools)] // each bool is an independent CLI flag
 struct Args {
     /// Directory to scan or snapshot file to load
     path: Option<PathBuf>,
@@ -57,6 +62,10 @@ struct Args {
     /// Disable Zstd compression for the output snapshot file (saves as uncompressed .edst)
     #[arg(long)]
     no_compression: bool,
+
+    /// Skip Docker inventory collection
+    #[arg(long)]
+    no_docker: bool,
 
     /// Restrict directory traversal to the same filesystem/device boundary
     #[arg(long, short = 'x', alias = "one-file-system")]
@@ -128,6 +137,7 @@ fn run_headless_scan_and_save(
     scan_path: &Path,
     mut to_path: PathBuf,
     no_compression: bool,
+    no_docker: bool,
     same_filesystem: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !scan_path.exists() {
@@ -176,6 +186,13 @@ fn run_headless_scan_and_save(
         return Err("Error: The completed scan resulted in an empty snapshot.".into());
     }
 
+    // Best-effort Docker inventory: attached to the snapshot as the
+    // EXT_DOCKER_INVENTORY extension (never fails the save).
+    let mut extensions = snapshot.extensions.clone();
+    if !no_docker {
+        collect_docker_to_extensions(&shared_state.scan_cancel, &mut extensions);
+    }
+
     let mut dest_path = to_path;
     if dest_path.is_dir() {
         let folder_name = scan_path
@@ -185,15 +202,40 @@ fn run_headless_scan_and_save(
     }
 
     println!("Saving snapshot to: {}", dest_path.display());
-    edirstat::snapshot::save_snapshot(
+    edirstat::snapshot::save_snapshot_ext(
         &snapshot.nodes,
         &snapshot.string_pool,
         &dest_path,
         !no_compression,
+        &extensions,
     )?;
     println!("Snapshot saved successfully.");
 
     Ok(())
+}
+
+/// Collect the Docker inventory for the headless `--to` flow and insert it
+/// into `extensions`. Skipped silently when no Docker presence is detected;
+/// collection errors go to stderr and the plain snapshot is still saved.
+fn collect_docker_to_extensions(cancel: &AtomicBool, extensions: &mut ExtensionStore) {
+    let collector = edirstat::engine::docker::NativeDockerCollector::new();
+    if !collector.detect_environment().has_docker() {
+        return;
+    }
+    match collector.collect_preferred(cancel) {
+        Ok(inventory) => match inventory.to_extension_payload() {
+            Ok(payload) => {
+                println!("Docker inventory collected ({:?}).", inventory.source);
+                extensions.insert(
+                    EXT_DOCKER_INVENTORY,
+                    EXT_DOCKER_INVENTORY_VERSION,
+                    Arc::from(payload.as_slice()),
+                );
+            }
+            Err(e) => eprintln!("Warning: failed to encode the Docker inventory: {e}"),
+        },
+        Err(e) => eprintln!("Warning: Docker inventory collection failed: {e}"),
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -222,6 +264,7 @@ fn main() -> anyhow::Result<()> {
             &scan_path,
             to_path,
             args.no_compression,
+            args.no_docker,
             args.same_filesystem,
         )
         .map_err(|e| anyhow::anyhow!("{e}"))?;
