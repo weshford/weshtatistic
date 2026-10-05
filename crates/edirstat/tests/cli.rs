@@ -91,9 +91,11 @@ fn test_to_dest_saves_compressed_snapshot() -> Result<(), Box<dyn std::error::Er
     std::fs::write(scan_dir.join("known_file.txt"), b"known contents")?;
     let dest = temp_dir.join("snapshot_out");
 
+    // `--no-docker`: never touch the host's Docker installation from a test.
     let output = edirstat_cli()
         .arg("--to")
         .arg(&dest)
+        .arg("--no-docker")
         .arg(&scan_dir)
         .output()?;
 
@@ -134,6 +136,7 @@ fn test_to_dest_saves_uncompressed_snapshot() -> Result<(), Box<dyn std::error::
         .arg("--to")
         .arg(&dest)
         .arg("--no-compression")
+        .arg("--no-docker")
         .arg(&scan_dir)
         .output()?;
 

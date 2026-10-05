@@ -25,6 +25,7 @@
 //! parse. Nothing here panics.
 
 use std::{
+    ffi::OsString,
     fmt,
     io::{ErrorKind, Read, Write},
     os::unix::net::UnixStream,
@@ -151,10 +152,11 @@ impl From<DockerApiError> for EdirstatError {
 
 /// Discover the daemon socket: `$DOCKER_HOST` (when it is a `unix://` path),
 /// then `/var/run/docker.sock`, then the rootless `$XDG_RUNTIME_DIR` socket.
-/// First existing path wins; `None` when no candidate exists.
+/// First existing path wins; `None` when no candidate exists. Environment
+/// variables are read through `var` (normally [`std::env::var_os`]).
 #[must_use]
-pub(crate) fn discover_socket() -> Option<PathBuf> {
-    if let Some(host) = std::env::var_os("DOCKER_HOST") {
+pub(crate) fn discover_socket(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    if let Some(host) = var("DOCKER_HOST") {
         let host = host.to_string_lossy();
         // An explicit `unix://` override wins when the path exists.
         if let Some(path) = host
@@ -168,14 +170,14 @@ pub(crate) fn discover_socket() -> Option<PathBuf> {
     if system.exists() {
         return Some(system);
     }
-    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+    if let Some(runtime_dir) = var("XDG_RUNTIME_DIR") {
         let candidate = PathBuf::from(runtime_dir).join("docker.sock");
         if candidate.exists() {
             return Some(candidate);
         }
     }
     // Docker Desktop (macOS) and some rootless setups live under the home dir.
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = var("HOME") {
         let candidate = PathBuf::from(home).join(".docker/run/docker.sock");
         if candidate.exists() {
             return Some(candidate);
@@ -1407,7 +1409,7 @@ mod tests {
     #[test]
     #[ignore = "requires a live Docker daemon; only ever deletes a nonexistent image"]
     fn test_delete_image_real_daemon_reports_not_found() -> Result<(), Box<dyn std::error::Error>> {
-        let Some(socket) = discover_socket() else {
+        let Some(socket) = discover_socket(|key| std::env::var_os(key)) else {
             return Ok(()); // No daemon on this host: nothing to validate.
         };
         let id = format!("edirstat-nonexistent-{}", std::process::id());
@@ -1485,7 +1487,7 @@ mod tests {
     #[test]
     #[ignore = "mutates a live Docker daemon (pulls + deletes hello-world:latest)"]
     fn test_delete_image_real_daemon_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
-        let Some(socket) = discover_socket() else {
+        let Some(socket) = discover_socket(|key| std::env::var_os(key)) else {
             return Ok(()); // No daemon on this host: nothing to validate.
         };
         let cancel = AtomicBool::new(false);
@@ -1628,7 +1630,7 @@ mod tests {
     #[test]
     #[ignore = "mutates a live Docker daemon (creates + deletes a test container)"]
     fn test_delete_container_real_daemon_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
-        let Some(socket) = discover_socket() else {
+        let Some(socket) = discover_socket(|key| std::env::var_os(key)) else {
             return Ok(()); // No daemon on this host: nothing to validate.
         };
         let cancel = AtomicBool::new(false);
@@ -1669,7 +1671,7 @@ mod tests {
     #[test]
     #[ignore = "mutates a live Docker daemon (creates + deletes a test volume)"]
     fn test_delete_volume_real_daemon_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
-        let Some(socket) = discover_socket() else {
+        let Some(socket) = discover_socket(|key| std::env::var_os(key)) else {
             return Ok(()); // No daemon on this host: nothing to validate.
         };
         let cancel = AtomicBool::new(false);
@@ -1702,20 +1704,24 @@ mod tests {
         let explicit = dir.join("explicit.sock");
         fs::write(&explicit, b"")?;
 
-        // SAFETY: nextest runs every test in its own process, so no other
-        // thread can observe the variable mid-write.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("DOCKER_HOST", format!("unix://{}", explicit.display()));
-        }
-        assert_eq!(discover_socket().as_deref(), Some(explicit.as_path()));
+        // `DOCKER_HOST` is injected; every other variable is the real one.
+        let with_host = |host: String| {
+            move |key: &str| {
+                if key == "DOCKER_HOST" {
+                    Some(OsString::from(&host))
+                } else {
+                    std::env::var_os(key)
+                }
+            }
+        };
+        let unix_host = format!("unix://{}", explicit.display());
+        assert_eq!(
+            discover_socket(with_host(unix_host)).as_deref(),
+            Some(explicit.as_path())
+        );
 
         // A tcp:// DOCKER_HOST is not a Unix socket: discovery must ignore it.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("DOCKER_HOST", "tcp://127.0.0.1:2375");
-        }
-        let found = discover_socket();
+        let found = discover_socket(with_host("tcp://127.0.0.1:2375".to_owned()));
         assert!(
             found.is_none() || found.as_deref() != Some(explicit.as_path()),
             "tcp:// DOCKER_HOST must not select the unix path"

@@ -12,6 +12,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    ffi::OsString,
     fs,
     io::ErrorKind,
     path::{Path, PathBuf},
@@ -40,7 +41,17 @@ use serde_json::Value;
 const LARGE_LOG_THRESHOLD_BYTES: u64 = 50 * 1024 * 1024;
 
 /// Native [`DockerCollector`] implementation backed by filesystem metadata.
-pub struct NativeDockerCollector;
+pub struct NativeDockerCollector {
+    /// Variables read in place of the process environment (empty outside
+    /// tests), so tests never mutate it: unsound while other test threads run
+    /// under `cargo test`.
+    env_overrides: Vec<(&'static str, OsString)>,
+    /// Probe the system-wide roots (`daemon.json`'s data-root,
+    /// `/var/lib/docker`, `/var/lib/containerd`). Tests turn this off so only
+    /// their fixtures are discovered, whatever Docker setup the host has.
+    #[cfg(target_os = "linux")]
+    system_roots: bool,
+}
 
 impl Default for NativeDockerCollector {
     fn default() -> Self {
@@ -51,7 +62,19 @@ impl Default for NativeDockerCollector {
 impl NativeDockerCollector {
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self {
+            env_overrides: Vec::new(),
+            #[cfg(target_os = "linux")]
+            system_roots: true,
+        }
+    }
+
+    /// Environment lookup for daemon-socket and data-root discovery.
+    fn env_var(&self, key: &str) -> Option<OsString> {
+        self.env_overrides
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map_or_else(|| std::env::var_os(key), |(_, value)| Some(value.clone()))
     }
 
     /// Build the full inventory from one data root. Separate from
@@ -332,7 +355,7 @@ impl NativeDockerCollector {
     pub fn collect_preferred(&self, cancel: &AtomicBool) -> Result<DockerInventory, EdirstatError> {
         #[cfg(unix)]
         {
-            if let Some(socket) = super::docker_api::discover_socket() {
+            if let Some(socket) = super::docker_api::discover_socket(|key| self.env_var(key)) {
                 match super::docker_api::collect_system_df(&socket, cancel) {
                     Ok(mut inventory) => {
                         debug_log("docker inventory collected via daemon API");
@@ -391,17 +414,17 @@ impl DockerCollector for NativeDockerCollector {
     fn detect_environment(&self) -> DockerEnvironment {
         let mut env = DockerEnvironment::default();
         #[cfg(target_os = "linux")]
-        detect_linux_roots(&mut env);
+        detect_linux_roots(&mut env, |key| self.env_var(key), self.system_roots);
         #[cfg(target_os = "macos")]
-        detect_macos_vm_disks(&mut env);
+        detect_macos_vm_disks(&mut env, |key| self.env_var(key));
         #[cfg(windows)]
-        detect_windows(&mut env);
+        detect_windows(&mut env, |key| self.env_var(key));
         // A reachable daemon counts as Docker presence even when no data
         // root is visible in this filesystem namespace (e.g. a socket
         // bind-mounted into a container).
         #[cfg(unix)]
         {
-            env.daemon_socket = super::docker_api::discover_socket();
+            env.daemon_socket = super::docker_api::discover_socket(|key| self.env_var(key));
             if let Some(socket) = &env.daemon_socket {
                 debug_log(&format!("daemon socket discovered: {}", socket.display()));
             }
@@ -419,7 +442,7 @@ impl DockerCollector for NativeDockerCollector {
             // Deletion is daemon-only: same socket discovery as the API
             // collection path, and no disk fallback — removing daemon state
             // from under a live daemon is never attempted.
-            let Some(socket) = super::docker_api::discover_socket() else {
+            let Some(socket) = super::docker_api::discover_socket(|key| self.env_var(key)) else {
                 return Err(EdirstatError::Io(std::io::Error::new(
                     ErrorKind::NotFound,
                     "no Docker daemon socket found; image deletion requires the daemon",
@@ -447,7 +470,7 @@ impl DockerCollector for NativeDockerCollector {
         {
             // Daemon-only, same as delete_image: socket discovery identical
             // to the API collection path, never a disk fallback.
-            let Some(socket) = super::docker_api::discover_socket() else {
+            let Some(socket) = super::docker_api::discover_socket(|key| self.env_var(key)) else {
                 return Err(EdirstatError::Io(std::io::Error::new(
                     ErrorKind::NotFound,
                     "no Docker daemon socket found; container deletion requires the daemon",
@@ -472,7 +495,7 @@ impl DockerCollector for NativeDockerCollector {
         {
             // Daemon-only, same as delete_image: socket discovery identical
             // to the API collection path, never a disk fallback.
-            let Some(socket) = super::docker_api::discover_socket() else {
+            let Some(socket) = super::docker_api::discover_socket(|key| self.env_var(key)) else {
                 return Err(EdirstatError::Io(std::io::Error::new(
                     ErrorKind::NotFound,
                     "no Docker daemon socket found; volume deletion requires the daemon",
@@ -497,21 +520,27 @@ impl DockerCollector for NativeDockerCollector {
 /// relocate it precisely because Docker fills the system disk), then the
 /// system default path, then the rootless one.
 #[cfg(target_os = "linux")]
-fn detect_linux_roots(env: &mut DockerEnvironment) {
+fn detect_linux_roots(
+    env: &mut DockerEnvironment,
+    var: impl Fn(&str) -> Option<OsString>,
+    system_roots: bool,
+) {
     let mut candidates: Vec<(PathBuf, RootScope)> = Vec::new();
-    if let Some(data_root) = daemon_data_root() {
-        debug_log(&format!("daemon.json data-root: {}", data_root.display()));
-        candidates.push((data_root, RootScope::System));
+    if system_roots {
+        if let Some(data_root) = daemon_data_root() {
+            debug_log(&format!("daemon.json data-root: {}", data_root.display()));
+            candidates.push((data_root, RootScope::System));
+        }
+        candidates.push((PathBuf::from("/var/lib/docker"), RootScope::System));
+        // With the containerd image store, image bytes live in containerd's own
+        // root (often shared with other containerd consumers such as k8s).
+        candidates.push((PathBuf::from("/var/lib/containerd"), RootScope::System));
     }
-    candidates.push((PathBuf::from("/var/lib/docker"), RootScope::System));
-    // With the containerd image store, image bytes live in containerd's own
-    // root (often shared with other containerd consumers such as k8s).
-    candidates.push((PathBuf::from("/var/lib/containerd"), RootScope::System));
 
-    if let Some(base) = std::env::var_os("XDG_DATA_HOME")
+    if let Some(base) = var("XDG_DATA_HOME")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .or_else(|| var("HOME").map(|home| PathBuf::from(home).join(".local/share")))
     {
         candidates.push((base.join("docker"), RootScope::Rootless));
         candidates.push((base.join("containerd"), RootScope::Rootless));
@@ -553,10 +582,10 @@ fn parse_daemon_data_root(json: &str) -> Option<PathBuf> {
 
 /// macOS Docker Desktop keeps all state in a VM disk image per VM.
 #[cfg(target_os = "macos")]
-fn detect_macos_vm_disks(env: &mut DockerEnvironment) {
+fn detect_macos_vm_disks(env: &mut DockerEnvironment, var: impl Fn(&str) -> Option<OsString>) {
     use std::os::unix::fs::MetadataExt as _;
 
-    let Some(home) = std::env::var_os("HOME") else {
+    let Some(home) = var("HOME") else {
         return;
     };
     let vms_dir = PathBuf::from(home).join("Library/Containers/com.docker.docker/Data/vms");
@@ -584,7 +613,7 @@ fn detect_macos_vm_disks(env: &mut DockerEnvironment) {
 /// Windows Docker Desktop (WSL2 backend): `*.vhdx` VM disks plus the
 /// daemon's (bolt-based, unparsable) data directory.
 #[cfg(windows)]
-fn detect_windows(env: &mut DockerEnvironment) {
+fn detect_windows(env: &mut DockerEnvironment, var: impl Fn(&str) -> Option<OsString>) {
     let program_data = Path::new(r"C:\ProgramData\Docker");
     if program_data.is_dir() {
         // classify_root recognizes the `windowsfilter/` driver dir.
@@ -592,7 +621,7 @@ fn detect_windows(env: &mut DockerEnvironment) {
             .push(classify_root(program_data, RootScope::System));
     }
 
-    let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") else {
+    let Some(local_app_data) = var("LOCALAPPDATA") else {
         return;
     };
     let wsl_dir = PathBuf::from(local_app_data).join("Docker").join("wsl");
@@ -1413,6 +1442,26 @@ const fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 mod tests {
     use super::*;
 
+    /// `DOCKER_HOST` value pointing at a fake daemon socket.
+    #[cfg(target_os = "linux")]
+    fn unix_host(sock: &Path) -> OsString {
+        OsString::from(format!("unix://{}", sock.display()))
+    }
+
+    // Only the Linux-gated discovery tests need an isolated collector.
+    #[cfg(target_os = "linux")]
+    impl NativeDockerCollector {
+        /// A collector isolated from the host: it sees `vars` in place of the
+        /// process environment and skips the system-wide data roots, so tests
+        /// behave the same with or without Docker installed.
+        fn isolated<const N: usize>(vars: [(&'static str, OsString); N]) -> Self {
+            Self {
+                env_overrides: vars.into(),
+                system_roots: false,
+            }
+        }
+    }
+
     const IMAGE_ONE: &str = "1111aaaa2222bbbb3333cccc4444dddd5555eeee6666ffff0000111122223333";
     const IMAGE_TWO: &str = "9999aaaa8888bbbb7777cccc6666dddd5555eeee4444ffff3333222211110000";
     const CONTAINER: &str = "c0ffee42abc";
@@ -1951,11 +2000,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_collect_inventory_via_env_detection() -> Result<(), EdirstatError> {
-        // A real system daemon would win `primary_root`; the assertions below
-        // assume the fixture is primary, so skip on Docker hosts.
-        if Path::new("/var/lib/docker").exists() {
-            return Ok(());
-        }
         let base = std::env::current_dir()?
             .join("target")
             .join("test_docker_env_detect");
@@ -1963,14 +2007,7 @@ mod tests {
         let xdg = base.join("xdg");
         build_fixture(&xdg.join("docker"))?;
 
-        // SAFETY: nextest runs every test in its own process, so no other
-        // thread can observe the variable mid-write.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", &xdg);
-        }
-
-        let collector = NativeDockerCollector::new();
+        let collector = NativeDockerCollector::isolated([("XDG_DATA_HOME", OsString::from(&xdg))]);
         let env = collector.detect_environment();
         let root = env
             .data_roots
@@ -2090,9 +2127,6 @@ mod tests {
     #[cfg(all(unix, target_os = "linux"))]
     #[test]
     fn test_collect_preferred_prefers_api_and_enriches_from_disk() -> Result<(), EdirstatError> {
-        if Path::new("/var/lib/docker").exists() {
-            return Ok(());
-        }
         let base = std::env::current_dir()?
             .join("target")
             .join("test_docker_pref_api");
@@ -2101,15 +2135,10 @@ mod tests {
         build_fixture(&xdg.join("docker"))?;
         let sock = serve_once("api", http_ok(&df_body()))?;
 
-        // SAFETY: nextest runs every test in its own process, so no other
-        // thread can observe the variables mid-write.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("DOCKER_HOST", format!("unix://{}", sock.display()));
-            std::env::set_var("XDG_DATA_HOME", &xdg);
-        }
-
-        let collector = NativeDockerCollector::new();
+        let collector = NativeDockerCollector::isolated([
+            ("DOCKER_HOST", unix_host(&sock)),
+            ("XDG_DATA_HOME", OsString::from(&xdg)),
+        ]);
         let inventory = collector.collect_preferred(&AtomicBool::new(false))?;
         let _ = fs::remove_file(&sock);
 
@@ -2149,9 +2178,6 @@ mod tests {
     #[cfg(all(unix, target_os = "linux"))]
     #[test]
     fn test_collect_preferred_falls_back_to_disk_on_api_failure() -> Result<(), EdirstatError> {
-        if Path::new("/var/lib/docker").exists() {
-            return Ok(());
-        }
         let base = std::env::current_dir()?
             .join("target")
             .join("test_docker_pref_fallback");
@@ -2169,15 +2195,10 @@ mod tests {
             }
         });
 
-        // SAFETY: nextest runs every test in its own process, so no other
-        // thread can observe the variables mid-write.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("DOCKER_HOST", format!("unix://{}", sock.display()));
-            std::env::set_var("XDG_DATA_HOME", &xdg);
-        }
-
-        let collector = NativeDockerCollector::new();
+        let collector = NativeDockerCollector::isolated([
+            ("DOCKER_HOST", unix_host(&sock)),
+            ("XDG_DATA_HOME", OsString::from(&xdg)),
+        ]);
         let inventory = collector.collect_preferred(&AtomicBool::new(false))?;
         let _ = fs::remove_file(&sock);
 
@@ -2204,14 +2225,8 @@ mod tests {
             http_ok(r#"[{"Untagged":"app:latest"},{"Deleted":"sha256:deadbeef0123456789"}]"#),
         )?;
 
-        // SAFETY: nextest runs every test in its own process, so no other
-        // thread can observe the variable mid-write.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("DOCKER_HOST", format!("unix://{}", sock.display()));
-        }
-
-        let deletion = NativeDockerCollector::new().delete_image("a1b2c3d4e5f6", false)?;
+        let deletion = NativeDockerCollector::isolated([("DOCKER_HOST", unix_host(&sock))])
+            .delete_image("a1b2c3d4e5f6", false)?;
         let _ = fs::remove_file(&sock);
 
         assert_eq!(deletion.untagged, vec!["app:latest".to_owned()]);
@@ -2236,14 +2251,8 @@ mod tests {
         .into_bytes();
         let sock = serve_once("delete_conflict", response)?;
 
-        // SAFETY: nextest runs every test in its own process, so no other
-        // thread can observe the variable mid-write.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("DOCKER_HOST", format!("unix://{}", sock.display()));
-        }
-
-        let result = NativeDockerCollector::new().delete_image("a1b2c3d4e5f6", false);
+        let result = NativeDockerCollector::isolated([("DOCKER_HOST", unix_host(&sock))])
+            .delete_image("a1b2c3d4e5f6", false);
         let _ = fs::remove_file(&sock);
         let Err(error) = result else {
             return Err(missing("expected delete_image to fail with 409"));
@@ -2271,14 +2280,8 @@ mod tests {
         .into_bytes();
         let sock = serve_once("ct_conflict", response)?;
 
-        // SAFETY: nextest runs every test in its own process, so no other
-        // thread can observe the variable mid-write.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("DOCKER_HOST", format!("unix://{}", sock.display()));
-        }
-
-        let result = NativeDockerCollector::new().delete_container("abc123", false);
+        let result = NativeDockerCollector::isolated([("DOCKER_HOST", unix_host(&sock))])
+            .delete_container("abc123", false);
         let _ = fs::remove_file(&sock);
         let Err(error) = result else {
             return Err(missing("expected delete_container to fail with 409"));
@@ -2306,14 +2309,8 @@ mod tests {
         .into_bytes();
         let sock = serve_once("vol_conflict", response)?;
 
-        // SAFETY: nextest runs every test in its own process, so no other
-        // thread can observe the variable mid-write.
-        #[allow(unsafe_code)]
-        unsafe {
-            std::env::set_var("DOCKER_HOST", format!("unix://{}", sock.display()));
-        }
-
-        let result = NativeDockerCollector::new().delete_volume("edirstat-test-vol", false);
+        let result = NativeDockerCollector::isolated([("DOCKER_HOST", unix_host(&sock))])
+            .delete_volume("edirstat-test-vol", false);
         let _ = fs::remove_file(&sock);
         let Err(error) = result else {
             return Err(missing("expected delete_volume to fail with 409"));
