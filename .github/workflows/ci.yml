@@ -45,12 +45,7 @@ jobs:
         run: ./scripts/check.sh fonts
 
       - name: Verify licenses matching committed ones
-        run: |
-          if ! command -v cargo-about &> /dev/null; then
-            echo "cargo-about not found, installing..."
-            pacman -Syu --noconfirm --needed cargo-about
-          fi
-          ./scripts/check.sh licenses
+        run: ./scripts/check.sh licenses
 
   test-macos:
     name: Tests (macOS Native)

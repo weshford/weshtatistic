@@ -19,15 +19,17 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+#[cfg(any(target_os = "linux", windows))]
+use edirstat_core::docker::{DataRoot, RootScope};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use edirstat_core::docker::{VmBackend, VmDisk};
 use edirstat_core::{
     EdirstatError,
     arena::FileArenaSnapshot,
     docker::{
-        ContainerInfo, DataRoot, DockerCollector, DockerEnvironment, DockerInventory,
-        ImageDeletion, ImageInfo, InventorySource, InventoryTotals, InventoryWarning, LayerInfo,
-        RootScope, StorageKind, VolumeInfo,
+        ContainerInfo, DockerCollector, DockerEnvironment, DockerInventory, ImageDeletion,
+        ImageInfo, InventorySource, InventoryTotals, InventoryWarning, LayerInfo, StorageKind,
+        VolumeInfo,
     },
     extensions::{EXT_DOCKER_INVENTORY, EXT_DOCKER_INVENTORY_VERSION},
     state::SharedState,
@@ -640,7 +642,8 @@ fn vhdx_sizes(path: &Path) -> (u64, u64) {
     use std::os::windows::ffi::OsStrExt as _;
 
     use windows_sys::Win32::{
-        Foundation::GetLastError, Storage::FileSystem::GetCompressedFileSizeW,
+        Foundation::{ERROR_SUCCESS, GetLastError},
+        Storage::FileSystem::GetCompressedFileSizeW,
     };
 
     let apparent = fs::metadata(path).map_or(0, |meta| meta.len());
@@ -650,11 +653,10 @@ fn vhdx_sizes(path: &Path) -> (u64, u64) {
     let mut high = 0u32;
     // SAFETY: `wide` is a NUL-terminated UTF-16 buffer valid for the call's
     // duration; `high` is a valid out-pointer to stack storage.
-    let low = unsafe { GetCompressedFileSizeW(wide.as_ptr(), &mut high) };
+    let low = unsafe { GetCompressedFileSizeW(wide.as_ptr(), &raw mut high) };
     if low == u32::MAX {
         // SAFETY: `GetLastError` takes no parameters and has no side effects.
         let err = unsafe { GetLastError() };
-        const ERROR_SUCCESS: u32 = 0;
         if err != ERROR_SUCCESS {
             return (apparent, apparent);
         }
@@ -1571,7 +1573,7 @@ mod tests {
         assert!(rw_layer.container_mount);
         assert!(rw_layer.referenced);
         assert_eq!(rw_layer.size_bytes, 30);
-        assert!(rw_layer.image_ids.is_empty());
+        assert_eq!(rw_layer.image_ids, Vec::<String>::new());
 
         let init_layer = layer("initcache")?;
         assert!(init_layer.container_mount);
@@ -1582,7 +1584,7 @@ mod tests {
         assert!(!orphan.referenced);
         assert!(!orphan.container_mount);
         assert_eq!(orphan.size_bytes, 77);
-        assert!(orphan.image_ids.is_empty());
+        assert_eq!(orphan.image_ids, Vec::<String>::new());
 
         // Containers: config.v2.json + json log + rw layer via mounts mapping.
         assert_eq!(inventory.containers.len(), 1);
@@ -1736,6 +1738,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(any(target_os = "linux", windows))]
     #[test]
     fn test_classify_root_overlay2() -> Result<(), EdirstatError> {
         let root = std::env::current_dir()?
@@ -1762,6 +1765,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(any(target_os = "linux", windows))]
     #[test]
     fn test_classify_root_storage_drivers() -> Result<(), EdirstatError> {
         let base = std::env::current_dir()?
@@ -1799,6 +1803,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(any(target_os = "linux", windows))]
     #[test]
     fn test_classify_root_containerd_snapshotter_signature() -> Result<(), EdirstatError> {
         // Docker ≥29 with the containerd image store: no driver dirs, just
@@ -1943,6 +1948,7 @@ mod tests {
     /// Full public path exactly as the GUI drives it: env probe → primary
     /// root → disk collection, using an `XDG_DATA_HOME` override so the
     /// fixture is discovered as the rootless data root.
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_collect_inventory_via_env_detection() -> Result<(), EdirstatError> {
         // A real system daemon would win `primary_root`; the assertions below

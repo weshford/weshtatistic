@@ -21,6 +21,7 @@ ignore-dev-dependencies = true
 ignore-transitive-dependencies = false
 
 # Limit directory traversal to crate root to avoid non-deterministic ties
-# caused by readdir order across filesystems (ext4 vs btrfs vs overlayfs)
+# caused by readdir order across filesystems (ext4 vs btrfs vs overlayfs).
+# The cargo-about version is pinned in scripts/generate_licenses.sh.
 max-depth = 1
 

@@ -98,11 +98,7 @@ check_fonts() {
 
 check_licenses() {
     group_start "Checking third-party licenses (cargo about)"
-    if ! command -v cargo-about >/dev/null 2>&1 && ! cargo about --version >/dev/null 2>&1; then
-        echo "error: 'cargo about' is required but not installed." >&2
-        echo "       Install it with: pacman -S cargo-about (or cargo install cargo-about)" >&2
-        exit 1
-    fi
+    # generate_licenses.sh enforces (and in CI installs) the pinned cargo-about.
     ./scripts/generate_licenses.sh
     git -c safe.directory=* diff --exit-code crates/edirstat-gui/assets/licenses/
     group_end

@@ -914,13 +914,13 @@ mod tests {
         assert_eq!(img_one.size_bytes, 300);
         assert_eq!(img_one.shared_bytes, 200);
         assert_eq!(img_one.created, 1_686_125_350);
-        assert!(img_one.layer_cache_ids.is_empty());
+        assert_eq!(img_one.layer_cache_ids, Vec::<String>::new());
         // The one-shot server has no inspect route: df lacks layers, so the
         // count stays 0; df's `Containers` field feeds ref_count.
         assert_eq!(img_one.layer_count, 0);
         assert_eq!(img_one.ref_count, 1);
         let img_two = image(&inventory, IMAGE_TWO).ok_or_else(|| missing("image two"))?;
-        assert!(img_two.tags.is_empty());
+        assert_eq!(img_two.tags, Vec::<String>::new());
         assert_eq!(img_two.size_bytes, 250);
         assert_eq!(img_two.shared_bytes, 200);
         assert_eq!(img_two.layer_count, 0);
@@ -1132,7 +1132,7 @@ mod tests {
             )),
             "unexpected request head: {head:?}"
         );
-        assert!(deletion.untagged.is_empty());
+        assert_eq!(deletion.untagged, Vec::<String>::new());
         assert_eq!(deletion.deleted, vec!["sha256:beef".to_owned()]);
         Ok(())
     }

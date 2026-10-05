@@ -2644,7 +2644,7 @@ mod tests {
             crate::time_utils::format_epoch(0, &crate::time_utils::TimeFormat::default())
         );
         let (created, _) = cell(&provider, 1, 6)?;
-        assert!(!created.is_empty());
+        assert_ne!(created, "");
         let (refs, _) = cell(&provider, 1, 7)?;
         assert_eq!(refs, "3");
         let (refs, _) = cell(&provider, 0, 7)?;
@@ -2733,7 +2733,7 @@ mod tests {
         let (log, _) = cell(&provider, 1, 3)?;
         assert_eq!(log, format_size(150));
         let (created, _) = cell(&provider, 1, 4)?;
-        assert!(!created.is_empty());
+        assert_ne!(created, "");
 
         // Default sort: writable-layer size descending.
         let mut rows = vec![0, 1];
@@ -2768,7 +2768,7 @@ mod tests {
         let (refs, _) = cell(&provider, 0, 2)?;
         assert_eq!(refs, "0");
         let (created, _) = cell(&provider, 1, 3)?;
-        assert!(!created.is_empty());
+        assert_ne!(created, "");
 
         // Default sort: size descending.
         let mut rows = vec![0, 1];

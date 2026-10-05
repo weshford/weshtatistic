@@ -803,9 +803,9 @@ mod tests {
     #[test]
     fn every_rule_has_display_data_and_tier_consistency() {
         for rule in rules() {
-            assert!(!rule.id.is_empty());
-            assert!(!rule.title.is_empty());
-            assert!(!rule.restore_hint.is_empty());
+            assert_ne!(rule.id, "");
+            assert_ne!(rule.title, "");
+            assert_ne!(rule.restore_hint, "");
             match rule.tier {
                 CleanupTier::Regenerable => assert!(rule.command.is_none()),
                 CleanupTier::ToolMediated => {

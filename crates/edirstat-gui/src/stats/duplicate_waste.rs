@@ -255,7 +255,7 @@ mod tests {
         let results = DeduplicationResults::default();
         let mut chart = DuplicateWasteChart::new();
         chart.compute_waste(&snapshot, &results);
-        assert!(chart.top_extensions.is_empty());
+        assert_eq!(chart.top_extensions, Vec::new());
     }
 
     #[test]
@@ -340,7 +340,7 @@ mod tests {
         let mut chart = DuplicateWasteChart::new();
         chart.compute_waste(&snapshot, &results);
 
-        assert!(chart.top_extensions.is_empty());
+        assert_eq!(chart.top_extensions, Vec::new());
     }
 
     #[test]
