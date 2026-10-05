@@ -928,6 +928,29 @@ impl GuiApp {
         }
     }
 
+    /// Selects `node_idx` in the primary explorer table, expands its ancestor
+    /// chain so the flattened tree actually contains the row, and scrolls it
+    /// into view. Deliberately does NOT touch `vis_mode` — used by the
+    /// cleanup tab's click-to-jump location links, where the explorer panel
+    /// stays visible alongside the tab.
+    pub(crate) fn reveal_node_in_explorer(&mut self, snapshot: &FileArenaSnapshot, node_idx: u32) {
+        if (node_idx as usize) >= snapshot.nodes.len() {
+            return;
+        }
+        let mut curr = snapshot.nodes[node_idx as usize].parent_opt();
+        while let Some(ancestor) = curr {
+            self.table_state.expanded_rows.insert(ancestor);
+            curr = snapshot
+                .nodes
+                .get(ancestor as usize)
+                .and_then(crate::arena::FileNode::parent_opt);
+        }
+        self.table_state.selected_rows.clear();
+        self.table_state.selected_rows.insert(node_idx);
+        self.focus_node_idx = Some(node_idx);
+        self.scroll_to_selected = true;
+    }
+
     pub fn render_hierarchical_table(&mut self, ui: &mut egui::Ui, snapshot: &FileArenaSnapshot) {
         if snapshot.nodes.is_empty() {
             ui.centered_and_justified(|ui| {

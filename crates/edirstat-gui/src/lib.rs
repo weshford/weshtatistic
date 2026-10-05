@@ -33,7 +33,7 @@ pub mod preferences;
 pub mod stats;
 
 pub use edirstat_core::{
-    EdirstatError, arena, docker, extensions, file_id, snapshot, state, time_utils,
+    EdirstatError, arena, cleanup, docker, extensions, file_id, snapshot, state, time_utils,
 };
 pub use gui::theme as colors;
 

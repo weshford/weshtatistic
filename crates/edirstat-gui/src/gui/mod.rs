@@ -31,6 +31,7 @@ use super::{
 #[cfg(not(target_family = "wasm"))]
 use super::snapshot::save_snapshot;
 
+pub mod cleanup;
 pub mod deduplicator;
 pub mod docker;
 pub mod explorer;
@@ -53,6 +54,7 @@ pub enum VisMode {
     Plots,
     Deduplicator,
     Docker,
+    Cleanup,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,6 +173,9 @@ pub struct GuiApp {
 
     // Docker disk-space tab state
     pub(crate) docker_view: docker::DockerViewState,
+
+    // Cleanup tab state
+    pub(crate) cleanup_view: cleanup::CleanupViewState,
 
     // Defer initial CLI scan to the first render frame
     pub(crate) pending_initial_path: Option<PathBuf>,
@@ -547,6 +552,7 @@ impl GuiApp {
             deduplicator_dir_filter: String::new(),
             docker_view,
             docker_operations,
+            cleanup_view: cleanup::CleanupViewState::default(),
 
             pending_initial_path: initial_path,
 
@@ -618,6 +624,7 @@ impl GuiApp {
         self.deduplicator_progress = atomic_progress::Progress::new_spinner("Deduplicator");
         *self.deduplicator_results.write() =
             crate::stats::deduplicator::DeduplicationResults::default();
+        self.cleanup_view.reset();
         self.query_coordinator = crate::gui::explorer::QueryCoordinator::new();
         self.shared_state.scan_stats.reset();
         self.treemap_chart = stats::treemap::TreemapChart::default();
@@ -1501,10 +1508,32 @@ impl GuiApp {
                             .color(ui.visuals().strong_text_color()),
                     );
                 }
+                VisMode::Cleanup => {
+                    ui.heading(
+                        egui::RichText::new(t!("vis-mode-cleanup"))
+                            .strong()
+                            .color(ui.visuals().strong_text_color()),
+                    );
+                }
             }
 
             // Right side: Active Visualizer Modes
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Cleanup trashing needs live filesystem access (native-only)
+                if crate::IS_NATIVE || !crate::HIDE_NA_UI {
+                    let res = ui
+                        .add_enabled_ui(crate::IS_NATIVE, |ui| {
+                            ui.selectable_value(
+                                &mut self.vis_mode,
+                                VisMode::Cleanup,
+                                t!("vis-mode-cleanup"),
+                            )
+                        })
+                        .inner;
+                    if !crate::IS_NATIVE {
+                        res.on_disabled_hover_text(t!("web-not-available"));
+                    }
+                }
                 // Docker disk usage requires live filesystem access (native-only)
                 if crate::IS_NATIVE || !crate::HIDE_NA_UI {
                     let res = ui
@@ -1563,6 +1592,12 @@ impl GuiApp {
                         self.table_state.selected_rows.clear();
                         self.table_state.selected_rows.insert(target);
                         self.scroll_to_selected = true;
+                        ctx.request_repaint();
+                    }
+                }
+                crate::gui::operations::AppCommand::RevealInExplorer(target) => {
+                    if (target as usize) < snapshot.nodes.len() {
+                        self.reveal_node_in_explorer(snapshot, target);
                         ctx.request_repaint();
                     }
                 }
@@ -2091,6 +2126,11 @@ impl eframe::App for GuiApp {
         // --- Handle Table commands sent from standard and context-menu operations ---
         self.process_commands(&ctx, &snapshot);
 
+        // Publish a finished cleanup analysis on the next frame; the toast
+        // for scan-completion-triggered analyses fires here, without the tab
+        // needing to be open. An empty pending slot is a cheap no-op.
+        self.publish_pending_report();
+
         // Background Modal polling processing for custom TableOperations
         for op_group in &mut self.operations.groups {
             for op in op_group {
@@ -2110,6 +2150,10 @@ impl eframe::App for GuiApp {
             } else {
                 self.total_scan_duration = Some(start.elapsed());
                 self.scan_start_time = None;
+                // Scan finished: kick the cleanup analysis over the final
+                // snapshot; a large enough reclaim total raises a one-shot
+                // notification when the report is published.
+                self.start_cleanup_analysis(true);
             }
         }
 
@@ -2942,6 +2986,9 @@ impl GuiApp {
                 VisMode::Docker => {
                     self.render_docker_tab(ui, snapshot);
                 }
+                VisMode::Cleanup => {
+                    self.render_cleanup_tab(ui, snapshot);
+                }
             }
         });
     }
@@ -3043,6 +3090,7 @@ impl GuiApp {
                 if !self.right_panel_collapsed
                     && self.vis_mode != VisMode::Deduplicator
                     && self.vis_mode != VisMode::Docker
+                    && self.vis_mode != VisMode::Cleanup
                 {
                     egui::Panel::right("windirstat_extensions_panel")
                         .resizable(true)
@@ -3201,6 +3249,9 @@ impl GuiApp {
                     VisMode::Docker => {
                         self.render_docker_tab(ui, snapshot);
                     }
+                    VisMode::Cleanup => {
+                        self.render_cleanup_tab(ui, snapshot);
+                    }
                 }
             });
         });
@@ -3249,6 +3300,23 @@ fn render_custom_op_button(
     name: &str,
     enabled: bool,
     reason: &str,
+) -> egui::Response {
+    render_custom_op_button_scaled(ui, icon, name, enabled, reason, 1.0)
+}
+
+/// [`render_custom_op_button`] at a fraction of its default size: both the
+/// icon glyph and the button frame/padding scale together, so the rendered
+/// height shrinks proportionally (the default toolbar-sized button is ~26px
+/// tall, which overflows compact table rows). Used by the cleanup tab's
+/// per-row action cells; `scale = 1.0` reproduces the toolbar rendering
+/// exactly.
+fn render_custom_op_button_scaled(
+    ui: &mut egui::Ui,
+    icon: &str,
+    name: &str,
+    enabled: bool,
+    reason: &str,
+    scale: f32,
 ) -> egui::Response {
     let hover_color = get_op_hover_color(name);
 
@@ -3333,9 +3401,9 @@ fn render_custom_op_button(
                 }
 
                 // Set button padding to make it a nice square
-                ui.spacing_mut().button_padding = egui::vec2(6.0, 4.0);
+                ui.spacing_mut().button_padding = egui::vec2(6.0, 4.0) * scale;
 
-                ui.button(egui::RichText::new(icon).size(15.0))
+                ui.button(egui::RichText::new(icon).size(15.0 * scale))
             })
             .inner;
 
@@ -3464,6 +3532,38 @@ pub fn load_snapshot_from_js(bytes: &[u8], display_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cleanup tab's per-row action cells render the trash/delete op
+    /// buttons at 0.7x because the default toolbar size (measured ~25px tall
+    /// with the app font stack) overflows the table's 28px rows. This guards
+    /// the contract: the scaled button must fit a row with a visible margin,
+    /// while scale 1.0 stays toolbar-sized.
+    #[test]
+    fn op_button_scaled_fits_cleanup_table_row() {
+        let ctx = egui::Context::default();
+        crate::gui::fonts::install_fonts(&ctx);
+
+        let mut heights = [0.0_f32; 2];
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            heights[0] = render_custom_op_button_scaled(ui, "♻", "Move to Trash", true, "", 1.0)
+                .rect
+                .height();
+            heights[1] = render_custom_op_button_scaled(ui, "♻", "Move to Trash", true, "", 0.7)
+                .rect
+                .height();
+        });
+        output.textures_delta.clear(); // no renderer here to apply them
+
+        let [default_h, scaled_h] = heights;
+        assert!(
+            default_h > 20.0,
+            "default toolbar button regressed: {default_h}"
+        );
+        assert!(
+            scaled_h <= 24.0,
+            "scaled op button ({scaled_h}px) must fit the 28px cleanup row with a margin"
+        );
+    }
 
     #[test]
     fn test_locale_from_bcp47_matching() {

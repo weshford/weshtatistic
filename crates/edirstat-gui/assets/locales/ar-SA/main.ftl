@@ -536,3 +536,25 @@ docker-delete-partial-multi = { $succeeded } of { $count } deleted, { $failed } 
 badge-docker = دليل بيانات Docker
 badge-docker-vm = قرص Docker الافتراضي
 badge-docker-area = تخزين Docker { $area }
+
+# Cleanup
+vis-mode-cleanup = 🗑 Cleanup
+cleanup-desc = Well-known reclaimable directories found in this scan: build artifacts and caches you can move to trash, plus system caches best cleaned by their own tools.
+cleanup-summary = { $count } locations can free up { $size }
+cleanup-regenerable-total = { $size } directly reclaimable
+cleanup-tool-total = { $size } best cleaned by system tools
+cleanup-tier-regenerable = Regenerable
+cleanup-tier-tool = System tool
+cleanup-empty = No well-known cleanup targets in this scan.
+cleanup-analyzing = Analyzing scan for cleanup targets...
+cleanup-run-command = Run in a terminal:
+cleanup-copy = Copy
+cleanup-copied = Command copied to clipboard.
+cleanup-age-days = { $days } days
+cleanup-age-fresh = Recent
+cleanup-toast = 🗑 { $size } of reclaimable space found — open the Cleanup tab to review.
+cleanup-hdr-tier = Tier
+cleanup-hdr-title = What
+cleanup-hdr-path = Location
+cleanup-hdr-age = Age
+cleanup-hdr-action = Action

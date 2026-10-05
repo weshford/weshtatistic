@@ -27,6 +27,7 @@
 #![allow(clippy::too_many_lines)]
 
 pub mod arena;
+pub mod cleanup;
 pub mod docker;
 pub mod error;
 pub mod extensions;

@@ -51,6 +51,11 @@ pub enum AppCommand {
     ShowDockerDeleteResourceModal(Vec<crate::gui::docker::DockerDeleteTarget>),
     BackgroundOpCompleted(BackgroundOpResult),
     ZoomTreemap(u32),
+    /// Select `node` in the primary explorer table, expand its ancestor
+    /// chain, and scroll it into view — without switching the active
+    /// visualization (dispatched by the cleanup tab's click-to-jump
+    /// location links; the explorer panel is visible alongside).
+    RevealInExplorer(u32),
     /// A snapshot file picked in the browser, delivered as raw bytes
     /// (used by the wasm frontend's async file picker).
     LoadSnapshotBytes {

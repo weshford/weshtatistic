@@ -509,3 +509,25 @@ docker-delete-partial-multi = { $succeeded } of { $count } deleted, { $failed } 
 badge-docker = Docker 데이터 루트
 badge-docker-vm = Docker 가상 디스크
 badge-docker-area = Docker { $area } 스토리지
+
+# Cleanup
+vis-mode-cleanup = 🗑 Cleanup
+cleanup-desc = Well-known reclaimable directories found in this scan: build artifacts and caches you can move to trash, plus system caches best cleaned by their own tools.
+cleanup-summary = { $count } locations can free up { $size }
+cleanup-regenerable-total = { $size } directly reclaimable
+cleanup-tool-total = { $size } best cleaned by system tools
+cleanup-tier-regenerable = Regenerable
+cleanup-tier-tool = System tool
+cleanup-empty = No well-known cleanup targets in this scan.
+cleanup-analyzing = Analyzing scan for cleanup targets...
+cleanup-run-command = Run in a terminal:
+cleanup-copy = Copy
+cleanup-copied = Command copied to clipboard.
+cleanup-age-days = { $days } days
+cleanup-age-fresh = Recent
+cleanup-toast = 🗑 { $size } of reclaimable space found — open the Cleanup tab to review.
+cleanup-hdr-tier = Tier
+cleanup-hdr-title = What
+cleanup-hdr-path = Location
+cleanup-hdr-age = Age
+cleanup-hdr-action = Action
