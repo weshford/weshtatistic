@@ -1,6 +1,15 @@
 {
   description = "weshtatistic, a fast disk usage analyzer for Linux";
 
+  nixConfig = {
+    extra-substituters = [
+      "https://weshford.cachix.org"
+    ];
+    extra-trusted-public-keys = [
+      "weshford.cachix.org-1:AjjaEh2rtC/MRpoXY18gHcXr3KJqk7sUTigRsi23DSY="
+    ];
+  };
+
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs = { self, nixpkgs }:
