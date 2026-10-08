@@ -64,6 +64,11 @@
           doCheck = false;
 
           postInstall = ''
+            install -Dm644 assets/linux/weshtatistic.desktop \
+              $out/share/applications/weshtatistic.desktop
+            install -Dm644 crates/weshtatistic/assets/img/icon_512x.png \
+              $out/share/icons/hicolor/512x512/apps/weshtatistic.png
+
             wrapProgram $out/bin/weshtatistic \
               --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath [
                 pkgs.libxkbcommon
