@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the eDirStat web frontend for production.
+# Build the weshtatistic web frontend for production.
 #
 # Pipeline: cargo (release, wasm32, pinned nightly) -> wasm-bindgen (--target web) -> wasm-opt.
 # The wasm binary is built with atomics/bulk-memory target features (see the
@@ -12,7 +12,7 @@
 # Requires: rustup, wasm-bindgen-cli matching the lockfile's wasm-bindgen
 # version, and binaryen (wasm-opt).
 #
-# Output: `crates/edirstat-gui/dist/`
+# Output: `crates/weshtatistic-gui/dist/`
 #         (static files, serve with any web server, but requires CORS setup).
 set -euo pipefail
 
@@ -28,9 +28,9 @@ fi
 TOOLCHAIN="nightly-2026-07-15"
 rustup toolchain install "$TOOLCHAIN" --component rust-src --target wasm32-unknown-unknown
 
-GUI_CRATE="crates/edirstat-gui"
+GUI_CRATE="crates/weshtatistic-gui"
 DIST="$GUI_CRATE/dist"
-BIN_NAME="edirstat-web"
+BIN_NAME="weshtatistic-web"
 WASM_OPT_FEATURES=(
     --enable-bulk-memory
     --enable-threads
@@ -40,7 +40,7 @@ WASM_OPT_FEATURES=(
 )
 
 echo "==> Building $BIN_NAME (release, wasm32-unknown-unknown, $TOOLCHAIN)"
-RUSTFLAGS="${RUSTFLAGS:-} -D warnings" cargo +"$TOOLCHAIN" build -p edirstat-gui --bin "$BIN_NAME" --target wasm32-unknown-unknown --release
+RUSTFLAGS="${RUSTFLAGS:-} -D warnings" cargo +"$TOOLCHAIN" build -p weshtatistic-gui --bin "$BIN_NAME" --target wasm32-unknown-unknown --release
 
 echo "==> Running wasm-bindgen"
 rm -rf "$DIST"

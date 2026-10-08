@@ -1,5 +1,5 @@
 /* ==========================================================================
-   eDirStat Custom Dark Design System & Global Styles
+   weshtatistic Custom Dark Design System & Global Styles
    ========================================================================== */
 
 :root {
@@ -959,7 +959,7 @@ a {
   transition: all var(--transition-medium);
 }
 
-/* Active and Complete states matching eDirStat's design */
+/* Active and Complete states matching weshtatistic's design */
 .stage-step.active {
   background-color: rgba(124, 58, 237, 0.05);
   border-color: rgba(124, 58, 237, 0.2);

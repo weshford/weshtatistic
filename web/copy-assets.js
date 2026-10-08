@@ -22,10 +22,6 @@ const targets = [
     dest: path.join(projectRoot, 'static/assets/app-store-badge.svg')
   },
   {
-    src: path.join(repoRoot, 'assets/img/itch-badge.svg'),
-    dest: path.join(projectRoot, 'static/assets/itch-badge.svg')
-  },
-  {
     src: path.join(projectRoot, 'robots.txt'),
     dest: path.join(projectRoot, 'static/robots.txt')
   },
@@ -60,11 +56,11 @@ function copyFolderSync(from, to) {
 }
 
 // Copy the Web Viewer build output
-const distPath = path.join(repoRoot, 'crates/edirstat-gui/dist');
+const distPath = path.join(repoRoot, 'crates/weshtatistic-gui/dist');
 const destAppPath = path.join(projectRoot, 'static/app');
 if (fs.existsSync(distPath)) {
   copyFolderSync(distPath, destAppPath);
-  console.log("Copied crates/edirstat-gui/dist -> static/app");
+  console.log("Copied crates/weshtatistic-gui/dist -> static/app");
 }
 
 // Copy blog hero images

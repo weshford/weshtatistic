@@ -1,7 +1,7 @@
 {
-  "name": "edirstat-web",
+  "name": "weshtatistic-web",
   "version": "2.2.0",
-  "description": "eDirStat Static Landing Page",
+  "description": "weshtatistic Static Landing Page",
   "main": "index.js",
   "scripts": {
     "copy-assets": "node copy-assets.js",

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Central code quality and test dispatcher for eDirStat.
+# Central code quality and test dispatcher for weshtatistic.
 # Shared between the git pre-commit hook and CI/CD pipelines.
 #
 # Usage:
@@ -65,7 +65,7 @@ check_clippy() {
     group_start "Checking lints (cargo clippy)"
     cargo clippy --workspace --all-targets -- -D warnings
     if rustup target list --installed 2>/dev/null | grep -q "^wasm32-unknown-unknown$"; then
-        RUSTFLAGS="${RUSTFLAGS:-} -D warnings" cargo check -p edirstat-gui --bin edirstat-web --target wasm32-unknown-unknown --release
+        RUSTFLAGS="${RUSTFLAGS:-} -D warnings" cargo check -p weshtatistic-gui --bin weshtatistic-web --target wasm32-unknown-unknown --release
     fi
     group_end
 }
@@ -85,13 +85,13 @@ check_test() {
 check_fonts() {
     group_start "Validating translation & font consistency"
     # 1. Verify that egui parses all embedded fonts and covers the corpus
-    cargo test -p edirstat-gui --quiet -- fonts::tests
+    cargo test -p weshtatistic-gui --quiet -- fonts::tests
 
     # 2. When raw fonts are present or in CI, verify subset files match exactly
-    if is_ci || [[ -d "crates/edirstat-gui/assets/fonts/raw" ]]; then
+    if is_ci || [[ -d "crates/weshtatistic-gui/assets/fonts/raw" ]]; then
         ./scripts/fetch_fonts.sh
         python3 scripts/subset_fonts.py
-        git -c safe.directory=* diff --exit-code crates/edirstat-gui/assets/fonts/
+        git -c safe.directory=* diff --exit-code crates/weshtatistic-gui/assets/fonts/
     fi
     group_end
 }
@@ -100,7 +100,7 @@ check_licenses() {
     group_start "Checking third-party licenses (cargo about)"
     # generate_licenses.sh enforces (and in CI installs) the pinned cargo-about.
     ./scripts/generate_licenses.sh
-    git -c safe.directory=* diff --exit-code crates/edirstat-gui/assets/licenses/
+    git -c safe.directory=* diff --exit-code crates/weshtatistic-gui/assets/licenses/
     group_end
 }
 

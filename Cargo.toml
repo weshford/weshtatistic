@@ -1,14 +1,14 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-default-members = ["crates/edirstat"]
+default-members = ["crates/weshtatistic"]
 
 [workspace.package]
 version = "2.2.0"
 edition = "2024"
 license = "MIT"
 authors = ["Cody Wyatt Neiman (xangelix) <neiman@cody.to>"]
-repository = "https://github.com/xangelix/edirstat"
+repository = "https://github.com/weshford/weshtatistic"
 
 [patch.crates-io]
 winit = { git = "https://github.com/xangelix/winit.git", branch = "blur-fix" }

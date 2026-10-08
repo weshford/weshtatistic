@@ -2,7 +2,7 @@
 # Build WASM frontend, package static site with Zola & Vite, and serve locally.
 #
 # Pipeline:
-#   1. ./scripts/build_web.sh (cargo wasm32 -> wasm-bindgen -> wasm-opt -> crates/edirstat-gui/dist)
+#   1. ./scripts/build_web.sh (cargo wasm32 -> wasm-bindgen -> wasm-opt -> crates/weshtatistic-gui/dist)
 #   2. web/ packaging (npm install -> copy-assets -> vite build -> zola build -> web/public)
 #   3. static-web-server (hosts web/public)
 #

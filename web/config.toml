@@ -1,5 +1,5 @@
 base_url = "https://edirstat.com"
-title = "eDirStat"
+title = "weshtatistic"
 description = "Blazing-fast, open-source disk usage analyzer and duplicate file finder for Windows, macOS & Linux. A modern WinDirStat and WizTree alternative written in Rust with interactive treemap visualization."
 default_language = "en"
 output_dir = "public"
@@ -9,9 +9,9 @@ feed_filenames = ["atom.xml"]
 
 [extra]
 author = "xangelix"
-itch_io_url = "https://xangelix.itch.io/edirstat"
+github_releases_url = "https://github.com/weshford/weshtatistic/releases"
 mac_app_store_url = "https://apps.apple.com/us/app/edirstat/id6805133585"
-github_url = "https://github.com/xangelix/edirstat"
+github_url = "https://github.com/weshford/weshtatistic"
 version = "2.2.0"
 license = "MIT"
 tagline = "Fast Disk Usage Analyzer for Windows, macOS & Linux"

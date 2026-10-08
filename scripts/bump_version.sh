@@ -7,8 +7,8 @@
 #
 # Updates:
 #   - Cargo.toml (workspace.package.version)
-#   - crates/edirstat/Cargo.toml (path dependencies)
-#   - crates/edirstat-gui/Cargo.toml (path dependencies)
+#   - crates/weshtatistic/Cargo.toml (path dependencies)
+#   - crates/weshtatistic-gui/Cargo.toml (path dependencies)
 #   - runner/Cargo.toml (version and ProductVersion)
 #   - runner/Cargo.lock (runner package version)
 #   - web/config.toml (extra.version)
@@ -42,11 +42,11 @@ echo "==> Bumping version: $CURRENT_VER -> $NEW_VER"
 # 1. Cargo.toml (workspace)
 sed -i "s/^version = \"$CURRENT_VER\"/version = \"$NEW_VER\"/" Cargo.toml
 
-# 2. crates/edirstat/Cargo.toml
-sed -i "s/version = \"$CURRENT_VER\"/version = \"$NEW_VER\"/g" crates/edirstat/Cargo.toml
+# 2. crates/weshtatistic/Cargo.toml
+sed -i "s/version = \"$CURRENT_VER\"/version = \"$NEW_VER\"/g" crates/weshtatistic/Cargo.toml
 
-# 3. crates/edirstat-gui/Cargo.toml
-sed -i "s/version = \"$CURRENT_VER\"/version = \"$NEW_VER\"/g" crates/edirstat-gui/Cargo.toml
+# 3. crates/weshtatistic-gui/Cargo.toml
+sed -i "s/version = \"$CURRENT_VER\"/version = \"$NEW_VER\"/g" crates/weshtatistic-gui/Cargo.toml
 
 # 4. runner/Cargo.toml
 sed -i "s/^version = \"$CURRENT_VER\"/version = \"$NEW_VER\"/" runner/Cargo.toml
@@ -54,7 +54,7 @@ sed -i "s/ProductVersion = \"$CURRENT_VER\"/ProductVersion = \"$NEW_VER\"/" runn
 
 # 5. runner/Cargo.lock (if present)
 if [[ -f runner/Cargo.lock ]]; then
-    sed -i "/name = \"edirstat-runner\"/{n;s/version = \".*\"/version = \"$NEW_VER\"/}" runner/Cargo.lock
+    sed -i "/name = \"weshtatistic-runner\"/{n;s/version = \".*\"/version = \"$NEW_VER\"/}" runner/Cargo.lock
 fi
 
 # 6. web/config.toml
@@ -68,7 +68,7 @@ fi
 
 # 8. web/itch/index.html
 if [[ -f web/itch/index.html ]]; then
-    sed -i "s/eDirStat v$CURRENT_VER/eDirStat v$NEW_VER/" web/itch/index.html
+    sed -i "s/weshtatistic v$CURRENT_VER/weshtatistic v$NEW_VER/" web/itch/index.html
 fi
 
 # 9. CHANGELOG.md (convert [Unreleased] to [vX.Y.Z] - YYYY-MM-DD)
@@ -98,17 +98,17 @@ echo "       git push origin main --follow-tags"
 echo ""
 echo "  4. Publish to crates.io (strict order of operations due to dependencies):"
 echo "       # Step 1: Base core data model (no workspace dependencies)"
-echo "       cargo publish -p edirstat-core"
+echo "       cargo publish -p weshtatistic-core"
 echo ""
 echo "       # Wait ~30s for crates.io index to update, then Step 2:"
-echo "       # GUI crate (depends on edirstat-core)"
-echo "       cargo publish -p edirstat-gui"
+echo "       # GUI crate (depends on weshtatistic-core)"
+echo "       cargo publish -p weshtatistic-gui"
 echo ""
 echo "       # Wait ~30s for crates.io index to update, then Step 3:"
-echo "       # Main binary & engine (depends on edirstat-core and edirstat-gui)"
-echo "       cargo publish -p edirstat"
+echo "       # Main binary & engine (depends on weshtatistic-core and weshtatistic-gui)"
+echo "       cargo publish -p weshtatistic"
 echo ""
-echo "       (Note: 'edirstat-runner' has publish = false and is not published to crates.io)"
+echo "       (Note: 'weshtatistic-runner' has publish = false and is not published to crates.io)"
 echo ""
 echo "  5. Deployments & Store Packages:"
 echo "       - itch.io: Pushing tag triggers .github/workflows/release.yml (builds multivers & Inno Setup)"

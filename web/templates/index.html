@@ -13,8 +13,7 @@
     "softwareVersion": "{{ config.extra.version | safe }}",
     "license": "https://opensource.org/licenses/MIT",
     "isAccessibleForFree": true,
-    "downloadUrl": "{{ config.extra.mac_app_store_url | safe }}",
-    "installUrl": "{{ config.extra.itch_io_url | safe }}",
+    "downloadUrl": "{{ config.extra.github_releases_url | safe }}",
     "codeRepository": "{{ config.extra.github_url | safe }}",
     "screenshot": "{{ config.base_url | safe }}/{{ config.extra.og_image | safe }}",
     "offers": {
@@ -56,7 +55,7 @@
 <header class="header">
     <div class="header-container">
         <a href="#" class="logo">
-            <img src="{{ get_url(path="assets/logo-nosubtext-transparent.svg") | safe }}" alt="eDirStat Logo" class="logo-img" width="160" height="40">
+            <img src="{{ get_url(path="assets/logo-nosubtext-transparent.svg") | safe }}" alt="weshtatistic Logo" class="logo-img" width="160" height="40">
         </a>
         <nav class="nav">
             <a href="#features" class="nav-link">Features</a>
@@ -106,7 +105,7 @@
             </a>
             <a href="#download" class="btn btn-primary btn-glow mobile-action-btn">
                 <i data-lucide="download"></i>
-                <span>Download eDirStat</span>
+                <span>Download weshtatistic</span>
             </a>
         </div>
     </div>
@@ -120,7 +119,7 @@
         <div class="hero-glow"></div>
         <div class="hero-content">
             <div class="hero-logo-wrapper">
-                <img src="{{ get_url(path="assets/logo-nosubtext-transparent.svg") | safe }}" alt="eDirStat Logo" class="hero-logo" width="220" height="55">
+                <img src="{{ get_url(path="assets/logo-nosubtext-transparent.svg") | safe }}" alt="weshtatistic Logo" class="hero-logo" width="220" height="55">
             </div>
             <div class="version-badge">
                 <span class="badge-dot"></span>
@@ -133,7 +132,7 @@
             </h1>
             
             <p class="hero-subtitle">
-                eDirStat is a modern, high-performance, cross-platform disk usage analyzer written in Rust.
+                weshtatistic is a modern, high-performance, cross-platform disk usage analyzer written in Rust.
                 Coupling a work-stealing multithreaded directory walker with a zero-copy arena data structure 
                 to scan millions of files in milliseconds.
             </p>
@@ -151,18 +150,19 @@
                 </div>
                 
                 <div class="hero-store-row">
-                    <a href="{{ config.extra.mac_app_store_url }}" target="_blank" rel="noopener noreferrer" class="app-store-badge-btn" aria-label="Download eDirStat on the Mac App Store">
+                    <a href="{{ config.extra.mac_app_store_url }}" target="_blank" rel="noopener noreferrer" class="app-store-badge-btn" aria-label="Download weshtatistic on the Mac App Store">
                         <img src="{{ get_url(path="assets/app-store-badge.svg") | safe }}" alt="Download on the Mac App Store" class="app-store-badge-img" width="156" height="40">
                     </a>
-                    <a href="{{ config.extra.itch_io_url }}" target="_blank" rel="noopener noreferrer" class="app-store-badge-btn" aria-label="Download eDirStat on itch.io">
-                        <img src="{{ get_url(path="assets/itch-badge.svg") | safe }}" alt="Download on itch.io" class="app-store-badge-img" width="156" height="40">
+                    <a href="{{ config.extra.github_releases_url }}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
+                        <i data-lucide="download"></i>
+                        <span>GitHub Releases</span>
                     </a>
                 </div>
             </div>
             
             <div class="hero-note">
                 <i data-lucide="shield" class="note-icon"></i>
-                <span>100% open-source under the MIT license. Binaries available on the Mac App Store and itch.io.</span>
+                <span>100% open-source under the MIT license. Free binaries are available on GitHub Releases.</span>
             </div>
         </div>
     </section>
@@ -193,7 +193,7 @@
     <section id="simulator" class="section">
         <div class="section-header">
             <h2 class="section-title">Experience the Speed</h2>
-            <p class="section-subtitle">Interact with this real-time simulator showing how eDirStat maps and visualizes disk space.</p>
+            <p class="section-subtitle">Interact with this real-time simulator showing how weshtatistic maps and visualizes disk space.</p>
         </div>
         
         <div class="simulator-container glass-card">
@@ -232,7 +232,7 @@
     <section id="dedup-simulator" class="section">
         <div class="section-header">
             <h2 class="section-title">Cryptographic Deduplication</h2>
-            <p class="section-subtitle">Visualize how eDirStat's 7-stage pipeline isolates duplicate files and calculates reclaimable space without unnecessary disk reads.</p>
+            <p class="section-subtitle">Visualize how weshtatistic's 7-stage pipeline isolates duplicate files and calculates reclaimable space without unnecessary disk reads.</p>
         </div>
         
         <div class="dedup-simulator-container glass-card">
@@ -351,7 +351,7 @@
                         <div class="console-line text-dim">[SYSTEM] Engine online. Awaiting control signal.</div>
                     </div>
                     
-                    <!-- Live Deduplicator Results View (Mimicking actual eDirStat table view) -->
+                    <!-- Live Deduplicator Results View (Mimicking actual weshtatistic table view) -->
                     <div class="dedup-table-view collapsed" id="dedup-table-view">
                         <div class="table-actions-header">
                             <div class="action-summary">
@@ -455,7 +455,7 @@
         <!-- Benchmark Disclaimer -->
         <div class="benchmark-disclaimer" style="margin-top: 32px; opacity: 0.5; font-size: 0.8rem; line-height: 1.5; text-align: left;">
             <strong>Benchmark Disclaimer & Configuration:</strong> 
-            Comparisons were conducted against <strong>WinDirStat v2.6.2</strong>, <strong>WizTree v4.31</strong>, and <strong>QDirStat v2.0.01</strong> under controlled testing conditions with primed system caches, on their respective systems. eDirStat is an independent open-source utility and is not associated with, sponsored by, or endorsed by the trademark holders of those projects. Performance measurements depend heavily on hardware setup, filesystem fragmentation, operating system scheduling, and disk caching behavior; individual test results may vary.
+            Comparisons were conducted against <strong>WinDirStat v2.6.2</strong>, <strong>WizTree v4.31</strong>, and <strong>QDirStat v2.0.01</strong> under controlled testing conditions with primed system caches, on their respective systems. weshtatistic is an independent open-source utility and is not associated with, sponsored by, or endorsed by the trademark holders of those projects. Performance measurements depend heavily on hardware setup, filesystem fragmentation, operating system scheduling, and disk caching behavior; individual test results may vary.
         </div>
     </section>
 
@@ -463,29 +463,29 @@
     <section id="drag-races" class="section">
         <div class="section-header">
             <h2 class="section-title">Performance Drag Races</h2>
-            <p class="section-subtitle">Watch eDirStat go head-to-head against WinDirStat, WizTree, and other tools in real-time speed comparisons.</p>
+            <p class="section-subtitle">Watch weshtatistic go head-to-head against WinDirStat, WizTree, and other tools in real-time speed comparisons.</p>
         </div>
         
         <div class="drag-races-container">
-            <!-- Card 1: WinDirStat vs eDirStat -->
+            <!-- Card 1: WinDirStat vs weshtatistic -->
             <div class="drag-race-card glass-card">
                 <div class="video-wrapper">
-                    <iframe src="https://www.youtube-nocookie.com/embed/T7fUh01_jG8" title="WinDirStat vs eDirStat: Drag Race" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen loading="lazy" id="video-windirstat"></iframe>
+                    <iframe src="https://www.youtube-nocookie.com/embed/T7fUh01_jG8" title="WinDirStat vs weshtatistic: Drag Race" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen loading="lazy" id="video-windirstat"></iframe>
                 </div>
                 <div class="drag-race-info">
-                    <h3 class="drag-race-title">WinDirStat vs eDirStat</h3>
-                    <p class="drag-race-desc">A side-by-side speed comparison scanning a large directory structure. Watch how eDirStat's multithreaded directory walker completes the scan in seconds, while WinDirStat lags behind due to single-threaded layout traversal and locking issues.</p>
+                    <h3 class="drag-race-title">WinDirStat vs weshtatistic</h3>
+                    <p class="drag-race-desc">A side-by-side speed comparison scanning a large directory structure. Watch how weshtatistic's multithreaded directory walker completes the scan in seconds, while WinDirStat lags behind due to single-threaded layout traversal and locking issues.</p>
                 </div>
             </div>
             
-            <!-- Card 2: WizTree vs eDirStat -->
+            <!-- Card 2: WizTree vs weshtatistic -->
             <div class="drag-race-card glass-card">
                 <div class="video-wrapper">
-                    <iframe src="https://www.youtube-nocookie.com/embed/pxyJk6ipjNk" title="WizTree vs eDirStat: Drag Race" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen loading="lazy" id="video-wiztree"></iframe>
+                    <iframe src="https://www.youtube-nocookie.com/embed/pxyJk6ipjNk" title="WizTree vs weshtatistic: Drag Race" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen loading="lazy" id="video-wiztree"></iframe>
                 </div>
                 <div class="drag-race-info">
-                    <h3 class="drag-race-title">WizTree vs eDirStat</h3>
-                    <p class="drag-race-desc">Comparing raw traversal speed on local SSD storage. eDirStat utilizes advanced work-stealing scheduling to saturate all CPU cores, executing a near-instant walk that matches or exceeds disk-level direct scanners.</p>
+                    <h3 class="drag-race-title">WizTree vs weshtatistic</h3>
+                    <p class="drag-race-desc">Comparing raw traversal speed on local SSD storage. weshtatistic utilizes advanced work-stealing scheduling to saturate all CPU cores, executing a near-instant walk that matches or exceeds disk-level direct scanners.</p>
                 </div>
             </div>
         </div>
@@ -495,7 +495,7 @@
     <section id="features" class="section">
         <div class="section-header">
             <h2 class="section-title">Architected for Extreme Performance</h2>
-            <p class="section-subtitle">Every stage of eDirStat is optimized to eliminate bottlenecks and fully exploit modern hardware.</p>
+            <p class="section-subtitle">Every stage of weshtatistic is optimized to eliminate bottlenecks and fully exploit modern hardware.</p>
         </div>
         
         <div class="features-grid">
@@ -565,13 +565,13 @@
     <section id="guide" class="section">
         <div class="section-header">
             <h2 class="section-title">Getting Started</h2>
-            <p class="section-subtitle">Set up, compile from source, or run eDirStat directly on your operating system.</p>
+            <p class="section-subtitle">Set up, compile from source, or run weshtatistic directly on your operating system.</p>
         </div>
         
         <div class="guide-container glass-card">
             <div class="guide-tabs">
                 <button class="guide-tab active" data-target="guide-run">
-                    <span>Running eDirStat</span>
+                    <span>Running weshtatistic</span>
                 </button>
                 <button class="guide-tab" data-target="guide-build">
                     <span>Build from Source</span>
@@ -581,22 +581,22 @@
                 <div class="guide-pane active" id="guide-run">
                     <p class="guide-text">Run the graphical user interface from your terminal. You can pass a directory path as a positional argument to start scanning immediately:</p>
                     <pre><code class="language-bash"># Run GUI with default setup
-./edirstat
+./weshtatistic
 
 # Run GUI and immediately scan a directory
-./edirstat /path/to/scan</code></pre>
+./weshtatistic /path/to/scan</code></pre>
                     <div class="tip-box">
                         <i data-lucide="zap" class="tip-icon"></i>
                         <div>
-                            <strong>Windows Tip:</strong> You can just double-click the executable on Windows, but run eDirStat as an Administrator to unlock maximum performance.
+                            <strong>Windows Tip:</strong> You can just double-click the executable on Windows, but run weshtatistic as an Administrator to unlock maximum performance.
                         </div>
                     </div>
                 </div>
                 <div class="guide-pane" id="guide-build">
-                    <p class="guide-text">To compile eDirStat from source, make sure you have the Rust compiler and cargo nightly toolchain installed:</p>
+                    <p class="guide-text">To compile weshtatistic from source, make sure you have the Rust compiler and cargo nightly toolchain installed:</p>
                     <pre><code class="language-bash"># Clone the repository
-git clone https://github.com/xangelix/edirstat.git
-cd edirstat
+git clone https://github.com/weshford/weshtatistic.git
+cd weshtatistic
 
 # Compile optimized release binary
 cargo build --release</code></pre>
@@ -673,38 +673,37 @@ cargo build --release</code></pre>
     <section id="faq" class="section faq-section">
         <div class="section-header">
             <h2 class="section-title">Frequently Asked Questions</h2>
-            <p class="section-subtitle">Everything you need to know about eDirStat licenses, security sandboxing, performance, and platform support.</p>
+            <p class="section-subtitle">Everything you need to know about weshtatistic licenses, security sandboxing, performance, and platform support.</p>
         </div>
 
         <div class="faq-container">
             <details class="faq-item glass-card" open>
                 <summary class="faq-question">
-                    <span>What is the difference between the Mac App Store and itch.io editions? Can I switch between them?</span>
+                    <span>What is the difference between the Mac App Store and GitHub Releases?</span>
                     <i data-lucide="chevron-down" class="faq-chevron"></i>
                 </summary>
                 <div class="faq-answer">
-                    <p>The Mac App Store version runs inside Apple's mandatory App Sandbox, meaning it can only scan files and folders you explicitly grant it access to through the system file dialog — the itch.io version is not sandboxed and can scan any path directly. The App Store version is individually reviewed and approved by Apple and receives automatic updates through the App Store, while the itch.io version is Apple-notarized but distributed directly.</p>
-                    <p style="margin-top: 12px;">If you purchased the Mac App Store version and need the unrestricted build, email <button type="button" class="support-email-btn" data-contact="c3VwcG9ydEBlZGlyc3RhdC5jb20=" data-subject="TWFjIEFwcCBTdG9yZSBMaWNlbnNlIFZlcmlmaWNhdGlvbg==" title="Click to copy email &amp; open mail app"><span class="email-text">support [at] edirstat.com</span><span class="email-copy-badge"><svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</span></button> with your receipt and we'll provide the itch.io version at no additional cost — unfortunately, the reverse is not possible, as we cannot issue Mac App Store copies to itch.io customers at this time.</p>
+                    <p>The Mac App Store version runs inside Apple's mandatory App Sandbox, meaning it can only scan files and folders you explicitly grant it access to through the system file dialog. It is individually reviewed by Apple and receives automatic updates through the App Store. GitHub Releases provide free, direct downloads for Windows, macOS, and Linux.</p>
                 </div>
             </details>
 
             <details class="faq-item glass-card">
                 <summary class="faq-question">
-                    <span>Does eDirStat collect any telemetry, analytics, or crash reports?</span>
+                    <span>Does weshtatistic collect any telemetry, analytics, or crash reports?</span>
                     <i data-lucide="chevron-down" class="faq-chevron"></i>
                 </summary>
                 <div class="faq-answer">
-                    <p><strong>No.</strong> eDirStat is 100% offline, privacy-first software with zero telemetry, zero analytics, zero network beacons, and zero crash reporting SDKs. The Mac App Store binary is compiled without any network entitlements, making network access physically impossible at the OS kernel level. Your filesystem hierarchy, folder names, and drive contents remain strictly private on your computer.</p>
+                    <p><strong>No.</strong> weshtatistic is 100% offline, privacy-first software with zero telemetry, zero analytics, zero network beacons, and zero crash reporting SDKs. The Mac App Store binary is compiled without any network entitlements, making network access physically impossible at the OS kernel level. Your filesystem hierarchy, folder names, and drive contents remain strictly private on your computer.</p>
                 </div>
             </details>
 
             <details class="faq-item glass-card">
                 <summary class="faq-question">
-                    <span>How is eDirStat so much faster than WinDirStat, WizTree, and QDirStat?</span>
+                    <span>How is weshtatistic so much faster than WinDirStat, WizTree, and QDirStat?</span>
                     <i data-lucide="chevron-down" class="faq-chevron"></i>
                 </summary>
                 <div class="faq-answer">
-                    <p>eDirStat is engineered in safe, parallel Rust using a lock-free, work-stealing thread pool and zero-copy columnar arena allocations. On Windows NTFS drives, it queries the Master File Table (MFT) directly, bypassing standard Win32 recursive APIs. On macOS and Linux, it uses high-concurrency <code>readdir</code> batches optimized to saturate NVMe queue depths and modern SSD controllers.</p>
+                    <p>weshtatistic is engineered in safe, parallel Rust using a lock-free, work-stealing thread pool and zero-copy columnar arena allocations. On Windows NTFS drives, it queries the Master File Table (MFT) directly, bypassing standard Win32 recursive APIs. On macOS and Linux, it uses high-concurrency <code>readdir</code> batches optimized to saturate NVMe queue depths and modern SSD controllers.</p>
                 </div>
             </details>
 
@@ -714,7 +713,7 @@ cargo build --release</code></pre>
                     <i data-lucide="chevron-down" class="faq-chevron"></i>
                 </summary>
                 <div class="faq-answer">
-                    <p><strong>Never.</strong> eDirStat never modifies or deletes any file without your explicit manual review and confirmation. The Duplicate Hunter identifies identical files using a 7-stage cryptographic pipeline: file size matching, prefix hashing, suffix hashing, sparse sampling, full Blake3 cryptographic verification, safety locks, and journal metadata confirmation. You can review all duplicate clusters in an interactive table and safely reclaim space using either hardlinks or permanent deletion.</p>
+                    <p><strong>Never.</strong> weshtatistic never modifies or deletes any file without your explicit manual review and confirmation. The Duplicate Hunter identifies identical files using a 7-stage cryptographic pipeline: file size matching, prefix hashing, suffix hashing, sparse sampling, full Blake3 cryptographic verification, safety locks, and journal metadata confirmation. You can review all duplicate clusters in an interactive table and safely reclaim space using either hardlinks or permanent deletion.</p>
                 </div>
             </details>
 
@@ -724,10 +723,10 @@ cargo build --release</code></pre>
                     <i data-lucide="chevron-down" class="faq-chevron"></i>
                 </summary>
                 <div class="faq-answer">
-                    <p>eDirStat runs natively across all major platforms:</p>
+                    <p>weshtatistic runs natively across all major platforms:</p>
                     <ul class="faq-list">
-                        <li><strong>macOS:</strong> Universal binary (native Apple Silicon M1/M2/M3/M4 &amp; Intel x86_64) on macOS 12.0 (Monterey) and higher. Available on the Mac App Store and itch.io.</li>
-                        <li><strong>Windows:</strong> 64-bit Windows 10 &amp; 11 with direct NTFS MFT acceleration. Available on itch.io.</li>
+                        <li><strong>macOS:</strong> Universal binary (native Apple Silicon M1/M2/M3/M4 &amp; Intel x86_64) on macOS 12.0 (Monterey) and higher. Available on the Mac App Store and GitHub Releases.</li>
+                        <li><strong>Windows:</strong> 64-bit Windows 10 &amp; 11 with direct NTFS MFT acceleration. Available on GitHub Releases.</li>
                         <li><strong>Linux:</strong> Standalone binaries, AppImage, deb, and rpm packages supporting ext4, btrfs, xfs, and ZFS.</li>
                         <li><strong>Web Viewer:</strong> In addition to desktop binaries, our Web Viewer lets you inspect and query exported <code>.edst</code> disk snapshot files directly in your browser with zero installation.</li>
                     </ul>
@@ -736,22 +735,22 @@ cargo build --release</code></pre>
 
             <details class="faq-item glass-card">
                 <summary class="faq-question">
-                    <span>Can eDirStat scan external hard drives, USB drives, and network shares?</span>
+                    <span>Can weshtatistic scan external hard drives, USB drives, and network shares?</span>
                     <i data-lucide="chevron-down" class="faq-chevron"></i>
                 </summary>
                 <div class="faq-answer">
-                    <p><strong>Yes.</strong> You can scan external hard drives, SSDs, USB flash drives, and mounted SMB/NFS network shares. On macOS, simply drag and drop any mounted volume or folder into eDirStat to grant security-scoped access immediately.</p>
+                    <p><strong>Yes.</strong> You can scan external hard drives, SSDs, USB flash drives, and mounted SMB/NFS network shares. On macOS, simply drag and drop any mounted volume or folder into weshtatistic to grant security-scoped access immediately.</p>
                 </div>
             </details>
 
             <details class="faq-item glass-card">
                 <summary class="faq-question">
-                    <span>How do I get support, report bugs, or claim an itch.io key?</span>
+                    <span>How do I get support or report bugs?</span>
                     <i data-lucide="chevron-down" class="faq-chevron"></i>
                 </summary>
                 <div class="faq-answer">
                     <p>For general bug reports, feature requests, and community discussions, please visit our open-source <a href="{{ config.extra.github_url }}/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a> page.</p>
-                    <p style="margin-top: 12px;">For private purchase inquiries, receipt verification, or claiming your complimentary unrestricted itch.io build after purchasing on the Mac App Store, email <button type="button" class="support-email-btn" data-contact="c3VwcG9ydEBlZGlyc3RhdC5jb20=" data-subject="U3VwcG9ydCBJbnF1aXJ5" title="Click to copy email &amp; open mail app"><span class="email-text">support [at] edirstat.com</span><span class="email-copy-badge"><svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</span></button>.</p>
+                    <p style="margin-top: 12px;">For private support inquiries, please visit <a href="{{ config.extra.github_url }}/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>.</p>
                 </div>
             </details>
         </div>
@@ -764,13 +763,14 @@ cargo build --release</code></pre>
             <!-- Card 1: Download -->
             <div class="cta-card glass-card">
                 <h2 class="cta-title">Ready to Scan?</h2>
-                <p class="cta-subtitle">Download on the Mac App Store or get official cross-platform binaries directly on itch.io.</p>
+                <p class="cta-subtitle">Download on the Mac App Store or get free cross-platform binaries from GitHub Releases.</p>
                 <div class="cta-buttons-group">
-                    <a href="{{ config.extra.mac_app_store_url }}" target="_blank" rel="noopener noreferrer" class="app-store-badge-btn" aria-label="Download eDirStat on the Mac App Store">
+                    <a href="{{ config.extra.mac_app_store_url }}" target="_blank" rel="noopener noreferrer" class="app-store-badge-btn" aria-label="Download weshtatistic on the Mac App Store">
                         <img src="{{ get_url(path="assets/app-store-badge.svg") | safe }}" alt="Download on the Mac App Store" class="app-store-badge-img" width="156" height="40">
                     </a>
-                    <a href="{{ config.extra.itch_io_url }}" target="_blank" rel="noopener noreferrer" class="app-store-badge-btn" aria-label="Download eDirStat on itch.io">
-                        <img src="{{ get_url(path="assets/itch-badge.svg") | safe }}" alt="Download on itch.io" class="app-store-badge-img" width="156" height="40">
+                    <a href="{{ config.extra.github_releases_url }}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
+                        <i data-lucide="download"></i>
+                        <span>GitHub Releases</span>
                     </a>
                 </div>
             </div>
@@ -778,7 +778,7 @@ cargo build --release</code></pre>
             <!-- Card 2: Contribute -->
             <div class="cta-card glass-card">
                 <h2 class="cta-title">Want to Contribute?</h2>
-                <p class="cta-subtitle">eDirStat is fully open-source. Report issues, request features, or submit pull requests on GitHub.</p>
+                <p class="cta-subtitle">weshtatistic is fully open-source. Report issues, request features, or submit pull requests on GitHub.</p>
                 <a href="{{ config.extra.github_url }}" target="_blank" class="btn btn-secondary btn-lg">
                     <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path><path d="M9 18c-4.51 2-5-2-7-2"></path></svg>
                     <span>Visit GitHub Repository</span>
@@ -794,7 +794,7 @@ cargo build --release</code></pre>
     <div class="footer-container">
         <div class="footer-left">
             <div class="logo">
-                <img src="{{ get_url(path="assets/logo-nosubtext-transparent.svg") | safe }}" alt="eDirStat Logo" class="logo-img" width="160" height="40">
+                <img src="{{ get_url(path="assets/logo-nosubtext-transparent.svg") | safe }}" alt="weshtatistic Logo" class="logo-img" width="160" height="40">
             </div>
             <p class="footer-desc">Fast, modern disk usage analyzer built in safe, native Rust.</p>
         </div>
@@ -805,8 +805,8 @@ cargo build --release</code></pre>
                 <a href="{{ config.extra.mac_app_store_url }}" target="_blank" class="footer-link">
                     <i data-lucide="apple"></i> Mac App Store
                 </a>
-                <a href="{{ config.extra.itch_io_url }}" target="_blank" class="footer-link">
-                    <i data-lucide="download"></i> itch.io
+                <a href="{{ config.extra.github_releases_url }}" target="_blank" class="footer-link">
+                    <i data-lucide="download"></i> GitHub Releases
                 </a>
                 <a href="{{ config.extra.github_url }}" target="_blank" class="footer-link">
                     <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 4px;"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path><path d="M9 18c-4.51 2-5-2-7-2"></path></svg> GitHub
@@ -818,8 +818,8 @@ cargo build --release</code></pre>
         </div>
     </div>
     <div class="footer-bottom">
-        <p>&copy; 2026 eDirStat. Released under the MIT License.</p>
-        <p class="trademark-disclaimer" style="opacity: 0.5; font-size: 0.8rem; margin-top: 8px;">WinDirStat, WizTree, and QDirStat are trademarks of their respective owners. eDirStat is an independent open-source project and is not affiliated with, sponsored by, or endorsed by the trademark holders.</p>
+        <p>&copy; 2026 weshtatistic. Released under the MIT License.</p>
+        <p class="trademark-disclaimer" style="opacity: 0.5; font-size: 0.8rem; margin-top: 8px;">WinDirStat, WizTree, and QDirStat are trademarks of their respective owners. weshtatistic is an independent open-source project and is not affiliated with, sponsored by, or endorsed by the trademark holders.</p>
     </div>
 </footer>
 {% endblock content %}

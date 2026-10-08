@@ -9,8 +9,8 @@ TARGET_CPUS="${TARGET_CPUS:-x86-64-v2 x86-64-v3 x86-64-v4 znver3 znver4 znver5 s
 MULTIVERS_ZSTD_LEVEL="${MULTIVERS_ZSTD_LEVEL:-20}"
 
 TARGETS="${TARGETS:-x86_64-unknown-linux-gnu x86_64-pc-windows-gnu}"
-PKG_NAME="edirstat"
-BIN_NAME="edirstat"
+PKG_NAME="weshtatistic"
+BIN_NAME="weshtatistic"
 CRATE_SUBDIR="runner"
 
 PROJECT_DIR="$(pwd)"
@@ -153,7 +153,7 @@ for TARGET in $TARGETS; do
     FINAL_EXE="${OUT_DIR}/${BIN_NAME}_multivers${EXE_EXT}"
 
     # Include /runner-wrapper/ in the path!
-    mv "$WRAPPER_TMP/runner-wrapper/target/${TARGET}/release/edirstat-runner${EXE_EXT}" "$FINAL_EXE"
+    mv "$WRAPPER_TMP/runner-wrapper/target/${TARGET}/release/weshtatistic-runner${EXE_EXT}" "$FINAL_EXE"
 
     # Clean up files for this iteration
     rm -rf "$WRAPPER_TMP"

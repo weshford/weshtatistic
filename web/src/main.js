@@ -151,21 +151,21 @@ const mockData = {
           ]
         },
         {
-          name: "edirstat",
+          name: "weshtatistic",
           type: "directory",
           sizeBytes: 1690000000,
-          path: "/Projects/edirstat",
+          path: "/Projects/weshtatistic",
           children: [
-            { name: "edirstat-binary", type: "file", ext: "code", sizeBytes: 1400000000, path: "/Projects/edirstat/edirstat-binary" },
-            { name: "arena.rs", type: "file", ext: "code", sizeBytes: 200000000, path: "/Projects/edirstat/arena.rs" },
-            { name: "Cargo.toml", type: "file", ext: "other", sizeBytes: 5000000, path: "/Projects/edirstat/Cargo.toml" },
+            { name: "weshtatistic-binary", type: "file", ext: "code", sizeBytes: 1400000000, path: "/Projects/weshtatistic/weshtatistic-binary" },
+            { name: "arena.rs", type: "file", ext: "code", sizeBytes: 200000000, path: "/Projects/weshtatistic/arena.rs" },
+            { name: "Cargo.toml", type: "file", ext: "other", sizeBytes: 5000000, path: "/Projects/weshtatistic/Cargo.toml" },
             {
               name: "src",
               type: "directory",
               sizeBytes: 85000000,
-              path: "/Projects/edirstat/src",
+              path: "/Projects/weshtatistic/src",
               children: [
-                { name: "walker.rs", type: "file", ext: "code", sizeBytes: 85000000, path: "/Projects/edirstat/src/walker.rs" }
+                { name: "walker.rs", type: "file", ext: "code", sizeBytes: 85000000, path: "/Projects/weshtatistic/src/walker.rs" }
               ]
             }
           ]
@@ -612,7 +612,7 @@ const benchmarkData = {
   nvme: {
     title: "Samsung 990 Pro NVMe PCIe Gen 4 SSD",
     desc: "Scanning dense repositories containing millions of files and nested directories. (Warm Cache)",
-    labels: ['eDirStat (Rust, Parallel)', 'QDirStat (Perl Backend)', 'WinDirStat (Legacy C++)', 'WizTree (Windows MFT)'],
+    labels: ['weshtatistic (Rust, Parallel)', 'QDirStat (Perl Backend)', 'WinDirStat (Legacy C++)', 'WizTree (Windows MFT)'],
     dnfTexts: [null, null, "Incompatible (Not supported on Linux/btrfs)", "Incompatible (Not supported on Linux/btrfs)"],
     datasets: [{
       label: 'Median Scan Duration (Seconds)',
@@ -637,7 +637,7 @@ const benchmarkData = {
   sata: {
     title: "Samsung 870 QVO SATA SSD (8TB)",
     desc: "Scanning game installations containing a mix of large zip archives and small asset files.",
-    labels: ['eDirStat (Rust, Parallel)', 'QDirStat (Perl Backend)', 'WinDirStat (Legacy C++)', 'WizTree (Windows MFT)'],
+    labels: ['weshtatistic (Rust, Parallel)', 'QDirStat (Perl Backend)', 'WinDirStat (Legacy C++)', 'WizTree (Windows MFT)'],
     dnfTexts: [null, null, "Incompatible (Not supported on Linux/btrfs)", "Incompatible (Not supported on Linux/btrfs)"],
     datasets: [{
       label: 'Median Scan Duration (Seconds)',
@@ -662,7 +662,7 @@ const benchmarkData = {
   hdd: {
     title: "Toshiba MG09SACA Mechanical HDD (16TB)",
     desc: "Traversing massive deeply nested directory structures on traditional spinning disks.",
-    labels: ['eDirStat (Rust, Parallel)', 'QDirStat (Perl Backend)', 'WinDirStat (Legacy C++)', 'WizTree (Windows MFT)'],
+    labels: ['weshtatistic (Rust, Parallel)', 'QDirStat (Perl Backend)', 'WinDirStat (Legacy C++)', 'WizTree (Windows MFT)'],
     dnfTexts: [null, null, "Incompatible (Not supported on Linux/btrfs)", "Incompatible (Not supported on Linux/btrfs)"],
     datasets: [{
       label: 'Median Scan Duration (Seconds)',
@@ -687,7 +687,7 @@ const benchmarkData = {
   mzvlb: {
     title: "Samsung MZVLB512HBJQ PCIe Gen 3 SSD",
     desc: "Scanning Windows system directories containing deep system libraries and DLLs.",
-    labels: ['eDirStat (Rust, Parallel)', 'WizTree (Windows MFT)', 'WinDirStat (Modern C++)', 'QDirStat (Perl Backend)'],
+    labels: ['weshtatistic (Rust, Parallel)', 'WizTree (Windows MFT)', 'WinDirStat (Modern C++)', 'QDirStat (Perl Backend)'],
     dnfTexts: [null, null, null, "Incompatible (Not supported on Windows)"],
     datasets: [{
       label: 'Median Scan Duration (Seconds)',

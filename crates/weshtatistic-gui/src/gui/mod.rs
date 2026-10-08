@@ -1,0 +1,3680 @@
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    str::FromStr as _,
+    sync::{Arc, atomic::Ordering},
+    time::{Duration, Instant},
+};
+
+#[cfg(not(target_family = "wasm"))]
+use std::path::Path;
+
+use compact_str::CompactString;
+use eframe::egui;
+use fluent_zero::t;
+use smallvec::SmallVec;
+use strum::IntoEnumIterator as _;
+
+#[cfg(not(target_family = "wasm"))]
+use rfd::FileDialog;
+
+use crate::arena::precompute_dir_counts;
+
+use super::{
+    ScanController,
+    arena::FileArenaSnapshot,
+    snapshot::LoadedSnapshot,
+    state::SharedState,
+    stats::{self, StatComponent as _},
+};
+
+#[cfg(not(target_family = "wasm"))]
+use super::snapshot::save_snapshot;
+
+pub mod cleanup;
+pub mod deduplicator;
+pub mod docker;
+pub mod explorer;
+pub mod extensions;
+pub mod fonts;
+pub mod modals;
+pub mod notifications;
+pub mod operations;
+pub mod reveal;
+pub mod shortcuts;
+pub mod theme;
+
+pub use extensions::ExtensionStat;
+pub use modals::{ActiveModal, LicenseTab};
+pub use notifications::{show_toasts, toast_error, toast_info, toast_success, toast_warning};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisMode {
+    Treemap,
+    Plots,
+    Deduplicator,
+    Docker,
+    Cleanup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlotType {
+    SizeDistribution,
+    AgeSizeScatter,
+    DirComposition,
+    ExtensionBoxplot,
+    TemporalTimeline,
+    DeduplicatorWaste,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutMode {
+    Classic,
+    WinDirStat,
+}
+
+/// Host-injected top-panel widget closure (see [`GuiApp::top_panel_prefix`]).
+pub type TopPanelPrefix = Box<dyn FnMut(&mut egui::Ui)>;
+
+#[allow(clippy::struct_excessive_bools)]
+pub struct GuiApp {
+    pub(crate) shared_state: Arc<SharedState>,
+    pub(crate) scanner: Option<Arc<dyn ScanController>>,
+
+    // Unified egui-table-kit State
+    pub(crate) table_state: egui_table_kit::state::TableState,
+
+    // Command listener channels for decoupled operations
+    pub(crate) command_rx: std::sync::mpsc::Receiver<crate::gui::operations::AppCommand>,
+    pub(crate) command_tx: std::sync::mpsc::Sender<crate::gui::operations::AppCommand>,
+
+    // Unified TableOperations set
+    pub(crate) operations: egui_table_kit::operations::TableOperations,
+
+    // Docker-tab Images table operations (scoped to that table: rendered
+    // only from its context menu, and gated on its TableState id).
+    pub(crate) docker_operations: egui_table_kit::operations::TableOperations,
+
+    // UI state
+    pub(crate) focus_node_idx: Option<u32>,
+    pub(crate) delete_node_indices: Vec<u32>,
+    pub(crate) search_query: String,
+    pub(crate) monospace_paths: bool,
+    pub(crate) treemap_borders: bool,
+    pub theme: theme::ThemePreference,
+    /// Optional host-injected widgets rendered at the very start of the top
+    /// panel (e.g. a host app's back/navigation button). `None` for the
+    /// standalone app.
+    pub top_panel_prefix: Option<TopPanelPrefix>,
+    pub(crate) treemap_style: stats::treemap::TreemapStyle,
+    pub(crate) left_panel_collapsed: bool,
+    pub(crate) right_panel_collapsed: bool,
+
+    pub(crate) filter_case_sensitive: bool,
+    pub(crate) filter_regex: bool,
+    pub(crate) focus_search: bool,
+    pub(crate) time_format: crate::time_utils::TimeFormat,
+
+    // Caching layer for tree search matches
+    pub(crate) query_coordinator: crate::gui::explorer::QueryCoordinator,
+
+    pub(crate) initial_name_col_width: Option<f32>,
+
+    // Visualization tabs
+    pub(crate) vis_mode: VisMode,
+    pub(crate) plot_type: PlotType,
+    pub(crate) layout_mode: LayoutMode,
+
+    // Analytics components
+    pub(crate) treemap_chart: stats::treemap::TreemapChart,
+    pub(crate) size_dist_chart: stats::size_distribution::SizeDistributionChart,
+    pub(crate) scatter_chart: stats::scatter_plot::FileAgeSizeScatterChart,
+    pub(crate) dir_comp_chart: stats::dir_composition::DirCompositionChart,
+    pub(crate) boxplot_chart: stats::extension_boxplot::ExtensionBoxplotChart,
+    pub(crate) timeline_chart: stats::temporal_timeline::TemporalTimelineChart,
+    pub(crate) duplicate_waste_chart: stats::duplicate_waste::DuplicateWasteChart,
+
+    // Modal states
+    pub(crate) delete_confirm_checked: bool,
+    pub(crate) delete_node_idx: Option<u32>,
+    pub(crate) active_modal: Option<ActiveModal>,
+    pub(crate) scan_path_input: String,
+    pub(crate) paste_requested: u8,
+    pub(crate) show_licenses: bool,
+    pub(crate) selected_license_tab: LicenseTab,
+
+    // Saved scan parameters
+    pub(crate) current_scan_path: Option<PathBuf>,
+    pub(crate) scan_start_time: Option<Instant>,
+    pub(crate) total_scan_duration: Option<Duration>,
+
+    // Extension breakdown stats
+    pub(crate) extension_stats: Vec<ExtensionStat>,
+    pub(crate) last_extension_update: Option<Instant>,
+
+    /// Tracked preference delta to safely batch config saves
+    pub(crate) last_saved_preferences: crate::preferences::UserPreferences,
+
+    // Single-use trigger to automatically scroll the list view to the target row
+    pub(crate) scroll_to_selected: bool,
+
+    // Single-use trigger to scroll the table to the top-most selected row after a resort
+    pub(crate) scroll_to_top_selected: bool,
+
+    // Deduplicator states
+    pub(crate) deduplicator_config: crate::stats::deduplicator::DeduplicatorConfig,
+    pub(crate) deduplicator_progress: atomic_progress::Progress,
+    pub(crate) deduplicator_results:
+        Arc<parking_lot::RwLock<crate::stats::deduplicator::DeduplicationResults>>,
+    pub(crate) deduplicator_cancel: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) selected_duplicates: HashSet<u32>,
+    pub(crate) delete_duplicates_indices: Vec<u32>,
+    pub(crate) deduplicator_dir_filter: String,
+
+    // Docker disk-space tab state
+    pub(crate) docker_view: docker::DockerViewState,
+
+    // Cleanup tab state
+    pub(crate) cleanup_view: cleanup::CleanupViewState,
+
+    // Defer initial CLI scan to the first render frame
+    pub(crate) pending_initial_path: Option<PathBuf>,
+
+    pub(crate) highlight_duplicates: bool,
+    pub(crate) deletion_confirmation: bool,
+    pub(crate) trash_confirmation: bool,
+    pub(crate) remember_confirmation: bool,
+    pub(crate) last_rendered_snapshot_ptr: usize,
+    pub(crate) last_extension_stats_ptr: usize,
+
+    /// Directories that were expanded when a rescan started, captured as paths
+    /// (not indices) so they can be re-resolved after the rescan re-indexes the
+    /// refreshed subtree. Consumed by the render loop when the next snapshot lands.
+    pub(crate) pending_expand_restore:
+        Option<std::collections::HashSet<String, ahash::RandomState>>,
+
+    /// Caches (Node Index, User String, Group String, Permissions String)
+    pub(crate) unix_metadata_cache: Option<(u32, String, String, String)>,
+
+    pub(crate) same_filesystem: bool,
+
+    /// Persistent path of the currently zoomed treemap directory (for restoring after rescans).
+    pub(crate) zoom_path: Option<String>,
+
+    pub(crate) locale: Locale,
+
+    pub(crate) locale_preference: Option<Locale>,
+
+    /// One-shot guard: non-Latin fallback fonts are installed on the first
+    /// rendered frame (`fonts::install_fonts` is a no-op when none were built).
+    pub(crate) fonts_installed: bool,
+
+    #[cfg(all(feature = "online", not(target_family = "wasm")))]
+    pub(crate) update_checker: egui_async::Bind<Option<String>, String>,
+}
+
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    strum::EnumIter,
+)]
+pub enum Locale {
+    #[default]
+    EnUs,
+    ArSa,
+    BnBd,
+    DeDe,
+    EsEs,
+    FrFr,
+    HiIn,
+    ItIt,
+    JaJp,
+    KoKr,
+    NlNl,
+    PlPl,
+    PtPt,
+    RuRu,
+    TrTr,
+    ViVn,
+    ZhCn,
+    ZhHk,
+}
+
+impl std::fmt::Display for Locale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EnUs => write!(f, "en-US"),
+            Self::ArSa => write!(f, "ar-SA"),
+            Self::BnBd => write!(f, "bn-BD"),
+            Self::DeDe => write!(f, "de-DE"),
+            Self::EsEs => write!(f, "es-ES"),
+            Self::FrFr => write!(f, "fr-FR"),
+            Self::HiIn => write!(f, "hi-IN"),
+            Self::ItIt => write!(f, "it-IT"),
+            Self::JaJp => write!(f, "ja-JP"),
+            Self::KoKr => write!(f, "ko-KR"),
+            Self::NlNl => write!(f, "nl-NL"),
+            Self::PlPl => write!(f, "pl-PL"),
+            Self::PtPt => write!(f, "pt-PT"),
+            Self::RuRu => write!(f, "ru-RU"),
+            Self::TrTr => write!(f, "tr-TR"),
+            Self::ViVn => write!(f, "vi-VN"),
+            Self::ZhCn => write!(f, "zh-CN"),
+            Self::ZhHk => write!(f, "zh-HK"),
+        }
+    }
+}
+
+impl Locale {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::EnUs => "en-US",
+            Self::ArSa => "ar-SA",
+            Self::BnBd => "bn-BD",
+            Self::DeDe => "de-DE",
+            Self::EsEs => "es-ES",
+            Self::FrFr => "fr-FR",
+            Self::HiIn => "hi-IN",
+            Self::ItIt => "it-IT",
+            Self::JaJp => "ja-JP",
+            Self::KoKr => "ko-KR",
+            Self::NlNl => "nl-NL",
+            Self::PlPl => "pl-PL",
+            Self::PtPt => "pt-PT",
+            Self::RuRu => "ru-RU",
+            Self::TrTr => "tr-TR",
+            Self::ViVn => "vi-VN",
+            Self::ZhCn => "zh-CN",
+            Self::ZhHk => "zh-HK",
+        }
+    }
+
+    pub fn apply(self) {
+        if let Ok(lang) = fluent_zero::LanguageIdentifier::from_str(self.as_str()) {
+            fluent_zero::set_lang(lang);
+        }
+    }
+
+    /// Matches a BCP-47 language tag or POSIX locale identifier (e.g. `"tr-TR"`, `"de_DE.UTF-8"`, `"fr"`)
+    /// against supported [`Locale`] variants.
+    #[must_use]
+    pub fn from_bcp47(tag: &str) -> Option<Self> {
+        let clean = tag
+            .split(['.', '@'])
+            .next()?
+            .replace('_', "-")
+            .trim()
+            .to_ascii_lowercase();
+
+        if clean.is_empty() {
+            return None;
+        }
+
+        // 1. Exact match (case-insensitive)
+        if let Some(locale) = Self::iter().find(|l| l.as_str().eq_ignore_ascii_case(&clean)) {
+            return Some(locale);
+        }
+
+        // 2. Chinese script and regional matching (distinguish Traditional vs Simplified)
+        if clean.starts_with("zh-hant") || clean == "zh-tw" || clean == "zh-hk" || clean == "zh-mo"
+        {
+            return Some(Self::ZhHk);
+        }
+        if clean.starts_with("zh-hans") || clean == "zh-cn" || clean == "zh-sg" {
+            return Some(Self::ZhCn);
+        }
+
+        // 3. Base language prefix match (e.g. "de" for "de-AT" or "de_DE")
+        let lang_code = clean.split('-').next()?;
+        if lang_code.is_empty() {
+            return None;
+        }
+
+        Self::iter().find(|l| {
+            let l_prefix = l.as_str().split('-').next().unwrap_or_default();
+            l_prefix.eq_ignore_ascii_case(lang_code)
+        })
+    }
+
+    /// Queries the operating system for the current system locale and matches it
+    /// against supported locales, falling back to [`Locale::default()`] (English).
+    #[must_use]
+    pub fn from_system() -> Self {
+        sys_locale::get_locale()
+            .as_deref()
+            .and_then(Self::from_bcp47)
+            .unwrap_or_default()
+    }
+}
+
+impl GuiApp {
+    #[must_use]
+    pub fn new(
+        shared_state: Arc<SharedState>,
+        scanner: Option<Arc<dyn ScanController>>,
+        initial_path: Option<PathBuf>,
+        same_filesystem: bool,
+    ) -> Self {
+        // Initialize the command queue channels
+        let (command_tx, command_rx) = std::sync::mpsc::channel();
+
+        // Ops that require a live local filesystem or OS integration are native-only unless HIDE_NA_UI is false.
+        let mut nav_ops: Vec<Box<dyn egui_table_kit::operations::TableOperation>> = vec![
+            Box::new(crate::gui::operations::UpOneLevelOp::new(
+                shared_state.clone(),
+                command_tx.clone(),
+            )),
+            Box::new(crate::gui::operations::ZoomTreemapOp::new(
+                shared_state.clone(),
+                command_tx.clone(),
+            )),
+        ];
+        if crate::IS_NATIVE || !crate::HIDE_NA_UI {
+            nav_ops.push(Box::new(crate::gui::operations::RefreshRootOp::new(
+                shared_state.clone(),
+                command_tx.clone(),
+            )));
+            nav_ops.push(Box::new(crate::gui::operations::RefreshDirectoryOp::new(
+                shared_state.clone(),
+                command_tx.clone(),
+            )));
+        }
+
+        let mut operations = egui_table_kit::operations::TableOperations::new().with_group(nav_ops);
+
+        if crate::IS_NATIVE || !crate::HIDE_NA_UI {
+            let mut file_ops: Vec<Box<dyn egui_table_kit::operations::TableOperation>> = vec![
+                Box::new(crate::gui::operations::OpenFileOp::new(
+                    shared_state.clone(),
+                )),
+                Box::new(crate::gui::operations::OpenFileManagerOp::new(
+                    shared_state.clone(),
+                )),
+            ];
+
+            if !crate::gui::operations::is_terminal_disabled() {
+                file_ops.push(Box::new(crate::gui::operations::OpenTerminalOp::new(
+                    shared_state.clone(),
+                )));
+            }
+
+            operations = operations.with_group(file_ops);
+        }
+
+        operations = operations.with_group(vec![
+            Box::new(crate::gui::operations::CopyNameOp::new(
+                shared_state.clone(),
+            )),
+            Box::new(crate::gui::operations::CopyPathOp::new(
+                shared_state.clone(),
+            )),
+        ]);
+
+        if crate::IS_NATIVE || !crate::HIDE_NA_UI {
+            operations = operations.with_group(vec![
+                Box::new(crate::gui::operations::TrashSelectedOp::new(
+                    command_tx.clone(),
+                )),
+                Box::new(crate::gui::operations::DeleteSelectedOp::new(
+                    command_tx.clone(),
+                )),
+            ]);
+        }
+
+        // The docker tab has its own registry so its operations can never
+        // appear on (or apply to) the primary explorer table, and vice versa;
+        // each op additionally gates on its table's state id. Group 0 is the
+        // section-agnostic refresh; group 1 the per-section deletes (op index
+        // = `DockerSection::op_index`).
+        let docker_view = docker::DockerViewState::default();
+        let running_flag = docker_view.deletion.running_flag();
+        let collection_running = docker_view.running.clone();
+        let docker_operations = egui_table_kit::operations::TableOperations::new()
+            .with_group(vec![Box::new(
+                crate::gui::operations::DockerRefreshOp::new(
+                    command_tx.clone(),
+                    scanner.clone(),
+                    collection_running,
+                ),
+            )])
+            .with_group(vec![
+                Box::new(crate::gui::operations::DockerDeleteImageOp::new(
+                    shared_state.clone(),
+                    command_tx.clone(),
+                    scanner.clone(),
+                    running_flag.clone(),
+                )),
+                Box::new(crate::gui::operations::DockerDeleteContainerOp::new(
+                    shared_state.clone(),
+                    command_tx.clone(),
+                    scanner.clone(),
+                    running_flag.clone(),
+                )),
+                Box::new(crate::gui::operations::DockerDeleteVolumeOp::new(
+                    shared_state.clone(),
+                    command_tx.clone(),
+                    scanner.clone(),
+                    running_flag,
+                )),
+            ]);
+
+        #[cfg(target_os = "windows")]
+        let active_modal = if cli_or_gui::is_elevated() {
+            None
+        } else {
+            Some(ActiveModal::AdminWarning)
+        };
+
+        #[cfg(not(target_os = "windows"))]
+        let active_modal = None;
+
+        let prefs = crate::preferences::load_preferences();
+        let locale = prefs.locale.unwrap_or_else(Locale::from_system);
+
+        // Keep the Fluent runtime aligned with the saved/auto-detected system locale
+        // from the very first frame.
+        locale.apply();
+
+        #[cfg(target_family = "wasm")]
+        {
+            *GLOBAL_COMMAND_TX.lock() = Some(command_tx.clone());
+            if let Some((name, bytes)) = PENDING_SNAPSHOT.lock().take() {
+                let _ = command_tx
+                    .send(crate::gui::operations::AppCommand::LoadSnapshotBytes { name, bytes });
+            }
+        }
+
+        Self {
+            shared_state,
+            scanner,
+            table_state: egui_table_kit::state::TableState::new("weshtatistic_hierarchical_table", 0),
+            command_rx,
+            command_tx,
+            operations,
+            focus_node_idx: None,
+            delete_node_indices: Vec::new(),
+            search_query: String::new(),
+            monospace_paths: prefs.monospace_paths,
+            treemap_borders: prefs.treemap_borders,
+            theme: prefs.theme,
+            top_panel_prefix: None,
+            treemap_style: prefs.treemap_style,
+            left_panel_collapsed: false,
+            right_panel_collapsed: false,
+            filter_case_sensitive: false,
+            filter_regex: false,
+            focus_search: false,
+            time_format: prefs.time_format.clone(),
+            last_saved_preferences: prefs.clone(),
+            query_coordinator: crate::gui::explorer::QueryCoordinator::new(),
+            initial_name_col_width: None,
+            vis_mode: VisMode::Treemap,
+            plot_type: PlotType::SizeDistribution,
+            layout_mode: LayoutMode::WinDirStat,
+            treemap_chart: stats::treemap::TreemapChart::new(),
+            size_dist_chart: stats::size_distribution::SizeDistributionChart::new(),
+            scatter_chart: stats::scatter_plot::FileAgeSizeScatterChart::new(),
+            dir_comp_chart: stats::dir_composition::DirCompositionChart::new(0),
+            boxplot_chart: stats::extension_boxplot::ExtensionBoxplotChart::new(),
+            timeline_chart: stats::temporal_timeline::TemporalTimelineChart::new(),
+            duplicate_waste_chart: stats::duplicate_waste::DuplicateWasteChart::new(),
+            delete_confirm_checked: false,
+            delete_node_idx: None,
+            active_modal,
+            scan_path_input: std::env::current_dir()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            paste_requested: 0,
+            show_licenses: false,
+            selected_license_tab: LicenseTab::Weshtatistic,
+            current_scan_path: None,
+            scan_start_time: None,
+            total_scan_duration: None,
+            extension_stats: Vec::new(),
+            last_extension_update: None,
+            scroll_to_selected: false,
+            scroll_to_top_selected: false,
+            deduplicator_config: crate::stats::deduplicator::DeduplicatorConfig::default(),
+            deduplicator_progress: atomic_progress::Progress::new_spinner("Deduplicator"),
+            deduplicator_results: Arc::new(parking_lot::RwLock::new(
+                crate::stats::deduplicator::DeduplicationResults::default(),
+            )),
+            deduplicator_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            selected_duplicates: HashSet::new(),
+            delete_duplicates_indices: Vec::new(),
+            deduplicator_dir_filter: String::new(),
+            docker_view,
+            docker_operations,
+            cleanup_view: cleanup::CleanupViewState::default(),
+
+            pending_initial_path: initial_path,
+
+            highlight_duplicates: false,
+            deletion_confirmation: prefs.deletion_confirmation,
+            trash_confirmation: prefs.trash_confirmation,
+            remember_confirmation: false,
+            last_rendered_snapshot_ptr: 0,
+            last_extension_stats_ptr: 0,
+            pending_expand_restore: None,
+
+            zoom_path: None,
+
+            unix_metadata_cache: None,
+
+            same_filesystem,
+
+            locale,
+
+            locale_preference: prefs.locale,
+
+            fonts_installed: false,
+
+            #[cfg(all(feature = "online", not(target_family = "wasm")))]
+            update_checker: egui_async::Bind::default(),
+        }
+    }
+
+    /// Process a pending initial path (CLI argument), if any: start a scan for
+    /// directories, or load a snapshot file. Called automatically before the
+    /// first rendered frame; exposed so tests can drive it explicitly.
+    pub fn process_pending_initial_path(&mut self) {
+        if let Some(path) = self.pending_initial_path.take() {
+            if path.exists() {
+                if path.is_dir() {
+                    self.start_scan(path);
+                } else if path.is_file()
+                    && let Err(e) = self.load_snapshot_file(path.clone())
+                {
+                    eprintln!("Error loading snapshot file {}: {e}", path.display());
+                }
+            } else {
+                eprintln!("Error: Path does not exist: {}", path.display());
+            }
+        }
+    }
+
+    fn reset_state(&mut self) {
+        self.table_state.selected_rows.clear();
+        self.table_state.expanded_rows.clear();
+        self.table_state.active_rows.clear();
+        self.table_state.sorted_children_cache.clear();
+        self.focus_node_idx = None;
+        self.delete_node_indices.clear();
+        self.extension_stats.clear();
+        self.last_extension_update = None;
+        self.delete_confirm_checked = false;
+        self.delete_node_idx = None;
+        self.active_modal = None;
+        self.show_licenses = false;
+        self.selected_license_tab = LicenseTab::Weshtatistic;
+        self.selected_duplicates.clear();
+        self.delete_duplicates_indices.clear();
+        self.deduplicator_dir_filter.clear();
+        self.scan_start_time = None;
+        self.total_scan_duration = None;
+        self.deduplicator_cancel
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.deduplicator_progress = atomic_progress::Progress::new_spinner("Deduplicator");
+        *self.deduplicator_results.write() =
+            crate::stats::deduplicator::DeduplicationResults::default();
+        self.cleanup_view.reset();
+        self.query_coordinator = crate::gui::explorer::QueryCoordinator::new();
+        self.shared_state.scan_stats.reset();
+        self.treemap_chart = stats::treemap::TreemapChart::default();
+        self.size_dist_chart = stats::size_distribution::SizeDistributionChart::default();
+        self.scatter_chart = stats::scatter_plot::FileAgeSizeScatterChart::default();
+        self.dir_comp_chart = stats::dir_composition::DirCompositionChart::default();
+        self.boxplot_chart = stats::extension_boxplot::ExtensionBoxplotChart::default();
+        self.timeline_chart = stats::temporal_timeline::TemporalTimelineChart::default();
+        self.duplicate_waste_chart = stats::duplicate_waste::DuplicateWasteChart::default();
+
+        self.scroll_to_selected = false;
+        self.scroll_to_top_selected = false;
+        self.last_rendered_snapshot_ptr = 0;
+        self.last_extension_stats_ptr = 0;
+        self.pending_expand_restore = None;
+        self.zoom_path = None;
+
+        self.unix_metadata_cache = None;
+
+        #[cfg(all(feature = "online", not(target_family = "wasm")))]
+        self.update_checker.clear();
+    }
+
+    /// Safely retrieves the single selected node index (if exactly one is selected)
+    #[must_use]
+    #[inline]
+    pub fn selected_node_idx(&self) -> Option<u32> {
+        if self.table_state.selected_rows.len() == 1 {
+            self.table_state.selected_rows.iter().next()
+        } else {
+            None
+        }
+    }
+
+    /// The path of the currently displayed scan/snapshot, if any.
+    #[must_use]
+    #[inline]
+    pub fn current_scan_path(&self) -> Option<&std::path::Path> {
+        self.current_scan_path.as_deref()
+    }
+
+    pub(crate) fn select_scan_path(&mut self, target_path: &std::path::Path) {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if crate::gui::operations::is_macos_sandbox() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_directory(target_path)
+                    .pick_folder()
+                {
+                    self.scan_path_input = path.to_string_lossy().into_owned();
+                }
+                return;
+            }
+        }
+        self.scan_path_input = target_path.to_string_lossy().into_owned();
+    }
+
+    pub(crate) fn start_scan(&mut self, mut path: PathBuf) {
+        let Some(scanner) = self.scanner.clone() else {
+            // Snapshot-viewer mode (e.g. wasm): scanning is unavailable.
+            return;
+        };
+
+        if let Ok(abs_path) = std::fs::canonicalize(&path) {
+            path = abs_path;
+        }
+
+        self.shared_state.scan_cancel.store(false, Ordering::SeqCst);
+        self.reset_state();
+
+        // Select the root row by default
+        self.table_state.selected_rows.insert(0);
+        self.focus_node_idx = Some(0);
+
+        self.current_scan_path = Some(path.clone());
+        self.scan_start_time = Some(Instant::now());
+        self.total_scan_duration = None;
+
+        scanner.start_scan(path, self.same_filesystem);
+    }
+
+    pub fn load_snapshot_file(&mut self, path: PathBuf) -> Result<(), crate::WeshtatisticError> {
+        let loaded = crate::snapshot::load_snapshot_full(&path)?;
+        self.ingest_loaded_snapshot(loaded);
+        let file_name = path
+            .file_name()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or_default();
+        crate::gui::toast_success(format!("Loaded snapshot: {file_name}"));
+        self.current_scan_path = Some(path);
+        Ok(())
+    }
+
+    /// Load a snapshot from an in-memory buffer (used by the wasm frontend,
+    /// where files are received as bytes from the browser's file picker).
+    /// `display_name` is only used for the UI path label.
+    pub fn load_snapshot_bytes(
+        &mut self,
+        display_name: &str,
+        bytes: &[u8],
+    ) -> Result<(), crate::WeshtatisticError> {
+        let loaded = crate::snapshot::load_snapshot_full_from_bytes(bytes)?;
+        self.ingest_loaded_snapshot(loaded);
+        self.current_scan_path = Some(PathBuf::from(display_name));
+        Ok(())
+    }
+
+    fn ingest_loaded_snapshot(&mut self, loaded: LoadedSnapshot) {
+        self.reset_state();
+
+        // Select the root row by default
+        self.table_state.selected_rows.insert(0);
+        self.focus_node_idx = Some(0);
+
+        // Keep the nodes in the memory map zero-copy
+        let loaded_snapshot = FileArenaSnapshot {
+            dir_counts: Arc::new(precompute_dir_counts(loaded.arena.nodes())),
+            nodes: Arc::new(crate::arena::NodeStorage::Mmapped(loaded.arena)),
+            string_pool: Arc::new(loaded.string_pool),
+            extensions: loaded.extensions,
+        };
+        self.shared_state.store_snapshot(loaded_snapshot);
+        self.scan_start_time = None;
+
+        // Rebuild extension stats and accumulate total stats in a single pass
+        let mut ext_map: HashMap<CompactString, (u64, u32), ahash::RandomState> =
+            HashMap::with_hasher(ahash::RandomState::new());
+
+        let mut total_files = 0;
+        let mut total_dirs = 0;
+        let mut total_bytes = 0u64;
+
+        let snapshot = self.shared_state.current_snapshot.load();
+        for node in snapshot.nodes.iter() {
+            if node.is_directory() {
+                total_dirs += 1;
+                continue;
+            }
+
+            total_files += 1;
+            total_bytes += node.size;
+
+            if let Some(name) = snapshot.string_pool.get(node.name_id) {
+                let ext_slice = super::arena::get_ext_slice(name);
+                super::arena::with_lowercase_ext(ext_slice, |ext_lowercased| {
+                    let ext = CompactString::new(ext_lowercased);
+                    let entry = ext_map.entry(ext).or_insert((0, 0));
+                    entry.0 += node.size;
+                    entry.1 += 1;
+                });
+            }
+        }
+
+        // Update the shared scan stats so the bottom status bar displays the totals
+        self.shared_state
+            .scan_stats
+            .files_scanned
+            .store(total_files, Ordering::SeqCst);
+        self.shared_state
+            .scan_stats
+            .dirs_scanned
+            .store(total_dirs, Ordering::SeqCst);
+        self.shared_state
+            .scan_stats
+            .bytes_scanned
+            .store(total_bytes as usize, Ordering::SeqCst);
+
+        let mut stats: Vec<(CompactString, u64, u32)> = ext_map
+            .into_iter()
+            .map(|(ext, (total_size, file_count))| (ext, total_size, file_count))
+            .collect();
+        stats.sort_by_key(|b| std::cmp::Reverse(b.1));
+        self.shared_state.extension_stats.store(Arc::new(stats));
+    }
+
+    /// Opens the scan options modal, seeding it with the active or current working directory.
+    pub fn open_scan_modal(&mut self) {
+        self.active_modal = Some(ActiveModal::ScanOptions);
+        if let Some(ref path) = self.current_scan_path {
+            self.scan_path_input = path.to_string_lossy().into_owned();
+        } else {
+            self.scan_path_input = std::env::current_dir()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+        }
+    }
+
+    /// Rescans the current scanned root directory if a scan is not already in progress.
+    pub fn rescan_current_root(&mut self) {
+        let is_scanning = self.shared_state.is_scanning.load(Ordering::SeqCst);
+        let snapshot = self.shared_state.current_snapshot.load();
+        if !is_scanning && !snapshot.nodes.is_empty() && self.scanner.is_some() {
+            self.refresh_directory_subtrees(&[0]);
+        }
+    }
+
+    /// Determines the default snapshot filename given the current scan path.
+    pub(crate) fn default_snapshot_filename(scan_path: Option<&std::path::Path>) -> String {
+        let base_name = scan_path
+            .and_then(|p| {
+                let name = p.file_name()?.to_string_lossy();
+                let stripped = name
+                    .strip_suffix(".edst.zst")
+                    .or_else(|| name.strip_suffix(".edst"))
+                    .unwrap_or(&name);
+                if stripped.is_empty() {
+                    None
+                } else {
+                    Some(stripped.to_string())
+                }
+            })
+            .unwrap_or_else(|| "snapshot".to_string());
+        format!("{base_name}.edst.zst")
+    }
+
+    /// Resolves the save path and compression mode from a user-selected path.
+    ///
+    /// Returns `(resolved_path, compress)`.
+    ///
+    /// - If the path ends with `.edst` (uncompressed snapshot format), compression is disabled (`compress = false`).
+    /// - If the path ends with `.edst.zst`, compression is enabled (`compress = true`).
+    /// - If the path ends with `.zst`, it is normalized to `.edst.zst` and compression is enabled.
+    /// - Otherwise (e.g. extension omitted or generic), `.edst.zst` is appended and compression is enabled.
+    #[cfg(any(not(target_family = "wasm"), test))]
+    pub(crate) fn resolve_snapshot_save_path(path: &std::path::Path) -> (std::path::PathBuf, bool) {
+        let is_edst = path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("edst"));
+
+        if is_edst {
+            (path.to_path_buf(), false)
+        } else if path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("zst"))
+        {
+            let stem_is_edst = path
+                .file_stem()
+                .and_then(|stem| std::path::Path::new(stem).extension())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("edst"));
+
+            if stem_is_edst {
+                (path.to_path_buf(), true)
+            } else {
+                let path_str = path.to_string_lossy();
+                let base = &path_str[..path_str.len().saturating_sub(4)];
+                (std::path::PathBuf::from(format!("{base}.edst.zst")), true)
+            }
+        } else {
+            let path_str = path.to_string_lossy();
+            (
+                std::path::PathBuf::from(format!("{path_str}.edst.zst")),
+                true,
+            )
+        }
+    }
+
+    /// Prompts the user to save the current tree snapshot to disk.
+    pub fn prompt_save_snapshot(&mut self, snapshot: &FileArenaSnapshot) {
+        if snapshot.nodes.is_empty() {
+            return;
+        }
+
+        let default_name = Self::default_snapshot_filename(self.current_scan_path.as_deref());
+
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let file_opt = FileDialog::new()
+                .add_filter(
+                    "weshtatistic Compressed Snapshot (*.edst.zst)",
+                    &["edst.zst", "zst"],
+                )
+                .add_filter("weshtatistic Uncompressed Snapshot (*.edst)", &["edst"])
+                .set_file_name(&default_name)
+                .save_file();
+            if let Some(path) = file_opt {
+                let (path, compress) = Self::resolve_snapshot_save_path(&path);
+                match save_snapshot(&snapshot.nodes, &snapshot.string_pool, &path, compress) {
+                    Ok(()) => {
+                        let file_name = path
+                            .file_name()
+                            .map(|s| s.to_string_lossy())
+                            .unwrap_or_default();
+                        if compress {
+                            crate::gui::toast_success(format!(
+                                "Saved compressed snapshot: {file_name} (Zstandard)"
+                            ));
+                        } else {
+                            crate::gui::toast_success(format!(
+                                "Saved uncompressed snapshot: {file_name}"
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        crate::gui::toast_error(format!("Failed to save snapshot: {e}"));
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_family = "wasm")]
+        {
+            let nodes = snapshot.nodes.clone();
+            let string_pool = snapshot.string_pool.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Some(handle) = rfd::AsyncFileDialog::new()
+                    .add_filter(
+                        "weshtatistic Compressed Snapshot (*.edst.zst)",
+                        &["edst.zst", "zst"],
+                    )
+                    .add_filter("weshtatistic Uncompressed Snapshot (*.edst)", &["edst"])
+                    .set_file_name(&default_name)
+                    .save_file()
+                    .await
+                {
+                    let file_name = handle.file_name();
+                    let compress = !std::path::Path::new(&file_name)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("edst"));
+                    let result =
+                        crate::snapshot::save_snapshot_to_bytes(&nodes, &string_pool, compress)
+                            .map_err(|e| e.to_string());
+                    match result {
+                        Ok(bytes) => {
+                            if let Err(e) = handle.write(&bytes).await {
+                                crate::gui::toast_error(format!("Failed to save snapshot: {e}"));
+                            } else if compress {
+                                crate::gui::toast_success(format!(
+                                    "Saved compressed snapshot: {file_name} (Zstandard)"
+                                ));
+                            } else {
+                                crate::gui::toast_success(format!(
+                                    "Saved uncompressed snapshot: {file_name}"
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            crate::gui::toast_error(format!("Failed to save snapshot: {e}"));
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    /// Renders the "New Scan" button (with an attention pulse while no snapshot
+    /// is loaded) and handles opening the scan options modal. Only called when
+    /// a native scanner backend is present.
+    fn draw_scan_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        is_scanning: bool,
+        snapshot: &FileArenaSnapshot,
+    ) {
+        let should_pulse = !is_scanning && snapshot.nodes.is_empty();
+        let scan_btn_text = t!("new-scan");
+        let sc_hint = shortcuts::format_shortcut(ui.ctx(), &shortcuts::SHORTCUT_NEW_SCAN);
+        let scan_btn = if should_pulse {
+            let time = ui.input(|i| i.time);
+            #[allow(clippy::cast_possible_truncation)]
+            let pulse = 0.5f64.mul_add((time * 3.0).sin(), 0.5) as f32; // gentle pulsing between 0.0 and 1.0
+
+            // Pulsing background and border with theme's scanning color
+            let fill_color = theme::get_color_scanning().linear_multiply(pulse.mul_add(0.12, 0.04));
+            let border_color =
+                theme::get_color_scanning().linear_multiply(pulse.mul_add(0.35, 0.15));
+            let text_color = if theme::get_current_theme() == theme::AppTheme::Light {
+                egui::Color32::from_rgb(28, 28, 30)
+            } else {
+                theme::COLOR_WHITE.linear_multiply(pulse.mul_add(0.15, 0.85))
+            };
+            let hover_active_text = if theme::get_current_theme() == theme::AppTheme::Light {
+                egui::Color32::from_rgb(28, 28, 30)
+            } else {
+                theme::COLOR_WHITE
+            };
+
+            ui.scope(|ui| {
+                ui.style_mut().visuals.button_frame = true;
+
+                // Inactive state (pulsing)
+                ui.style_mut().visuals.widgets.inactive.weak_bg_fill = fill_color;
+                ui.style_mut().visuals.widgets.inactive.bg_stroke =
+                    egui::Stroke::new(1.0f32, border_color);
+                ui.style_mut().visuals.widgets.inactive.fg_stroke =
+                    egui::Stroke::new(1.0f32, text_color);
+
+                // Hovered state (bright purple highlight)
+                ui.style_mut().visuals.widgets.hovered.weak_bg_fill =
+                    theme::get_color_scanning().linear_multiply(0.25);
+                ui.style_mut().visuals.widgets.hovered.bg_stroke =
+                    egui::Stroke::new(1.0f32, theme::get_color_scanning());
+                ui.style_mut().visuals.widgets.hovered.fg_stroke =
+                    egui::Stroke::new(1.0f32, hover_active_text);
+
+                // Active state (clicked)
+                ui.style_mut().visuals.widgets.active.weak_bg_fill =
+                    theme::get_color_scanning().linear_multiply(0.35);
+                ui.style_mut().visuals.widgets.active.bg_stroke =
+                    egui::Stroke::new(1.0f32, theme::get_color_scanning());
+                ui.style_mut().visuals.widgets.active.fg_stroke =
+                    egui::Stroke::new(1.0f32, hover_active_text);
+
+                ui.button(egui::RichText::new(scan_btn_text).strong())
+            })
+            .inner
+        } else {
+            ui.button(scan_btn_text)
+        }
+        .on_hover_text(format!("{} ({sc_hint})", t!("new-scan")));
+
+        if scan_btn.clicked() {
+            self.open_scan_modal();
+        }
+    }
+
+    /// Delegates render operations entirely to our registered `TableOperations` suite,
+    /// complete with top-level File actions and right-aligned shortcut badges.
+    pub(crate) fn draw_file_menu_contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        snapshot: &FileArenaSnapshot,
+    ) {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        ui.set_min_width(200.0);
+
+        // 1. Primary File Actions
+        if ui
+            .add(shortcuts::button_with_shortcut(
+                t!("new-scan"),
+                &shortcuts::SHORTCUT_NEW_SCAN,
+                ui.ctx(),
+            ))
+            .clicked()
+        {
+            self.open_scan_modal();
+            ui.close_kind(egui::UiKind::Menu);
+        }
+
+        let is_scanning = self.shared_state.is_scanning.load(Ordering::SeqCst);
+        let has_nodes = !snapshot.nodes.is_empty();
+
+        let can_rescan = !is_scanning && has_nodes && self.scanner.is_some();
+        let rescan_btn = ui.add_enabled_ui(can_rescan, |ui| {
+            ui.add(shortcuts::button_with_shortcut(
+                t!("op-refresh-entire-scan"),
+                &shortcuts::SHORTCUT_RESCAN,
+                ui.ctx(),
+            ))
+        });
+        if rescan_btn.inner.clicked() {
+            self.rescan_current_root();
+            ui.close_kind(egui::UiKind::Menu);
+        }
+
+        let save_btn = ui.add_enabled_ui(has_nodes, |ui| {
+            let sc_save =
+                shortcuts::format_shortcut(ui.ctx(), &shortcuts::SHORTCUT_SAVE_SNAPSHOT);
+            ui.add(shortcuts::button_with_shortcut(
+                t!("save-snapshot"),
+                &shortcuts::SHORTCUT_SAVE_SNAPSHOT,
+                ui.ctx(),
+            ))
+            .on_hover_text(format!(
+                "{} ({sc_save})\nSave active scan to a compressed snapshot (*.edst.zst with Zstandard)",
+                t!("save-snapshot")
+            ))
+        });
+        if save_btn.inner.clicked() {
+            self.prompt_save_snapshot(snapshot);
+            ui.close_kind(egui::UiKind::Menu);
+        }
+
+        ui.separator();
+
+        // 2. Table Operations Suite with mapped shortcut badges
+        let provider =
+            crate::gui::explorer::TableProviderWrapper::new(snapshot, self.time_format.clone());
+        let _ = self.operations.gui_custom(
+            ui,
+            &provider,
+            &mut self.table_state,
+            true,
+            |ui, op, enabled, reason, context_menu| {
+                let op_name = op.get_name(context_menu);
+                let shortcut_str = match op.name().as_ref() {
+                    name if name == t!("op-zoom-treemap") => Some("⏎ Enter"),
+                    name if name == t!("op-up-one-level") => Some("⌫ Backspace"),
+                    name if name == t!("op-move-trash") => Some("Del"),
+                    name if name == t!("op-permanently-delete") => Some("⇧ Del"),
+                    name if name == t!("op-copy-name") => {
+                        if ui.ctx().os().is_mac() {
+                            Some("⌘C")
+                        } else {
+                            Some("Ctrl+C")
+                        }
+                    }
+                    name if name == t!("op-copy-path") => {
+                        if ui.ctx().os().is_mac() {
+                            Some("⌥⌘C")
+                        } else {
+                            Some("Ctrl+Alt+C")
+                        }
+                    }
+                    _ => None,
+                };
+
+                ui.add_enabled_ui(enabled, |ui| {
+                    let btn = shortcut_str.map_or_else(
+                        || egui::Button::new(op_name.as_ref()),
+                        |sc| egui::Button::new(op_name.as_ref()).shortcut_text(sc),
+                    );
+                    let mut resp = ui.add(btn).on_hover_text(op.name());
+                    if !enabled {
+                        resp = resp.on_disabled_hover_text(format!("{}\n{reason}", op.name()));
+                    }
+                    resp
+                })
+                .inner
+            },
+        );
+
+        ui.separator();
+
+        // 3. Close Scan & Quit
+        let close_btn = ui.add_enabled_ui(has_nodes, |ui| {
+            ui.add(shortcuts::button_with_shortcut(
+                t!("file-menu-close"),
+                &shortcuts::SHORTCUT_CLOSE,
+                ui.ctx(),
+            ))
+        });
+        if close_btn.inner.clicked() {
+            self.reset_state();
+            ui.close_kind(egui::UiKind::Menu);
+        }
+
+        if ui
+            .add(shortcuts::button_with_shortcut(
+                t!("file-menu-quit"),
+                &shortcuts::SHORTCUT_QUIT,
+                ui.ctx(),
+            ))
+            .clicked()
+        {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            ui.close_kind(egui::UiKind::Menu);
+        }
+    }
+
+    fn draw_breadcrumb_item(
+        &mut self,
+        ui: &mut egui::Ui,
+        snapshot: &FileArenaSnapshot,
+        node_idx: u32,
+        is_current: bool,
+    ) {
+        let raw_name = snapshot
+            .string_pool
+            .get(snapshot.nodes[node_idx as usize].name_id)
+            .unwrap_or("");
+        let display_name = if node_idx == 0 {
+            let cleaned = crate::arena::clean_unc_path(raw_name);
+            format!("🏠 {cleaned}")
+        } else {
+            raw_name.to_string()
+        };
+
+        if is_current {
+            ui.label(
+                egui::RichText::new(display_name)
+                    .strong()
+                    .color(ui.visuals().strong_text_color()),
+            );
+        } else if ui.link(display_name).clicked() {
+            self.treemap_chart.zoom_root = node_idx;
+            self.zoom_path = if node_idx == 0 {
+                None
+            } else {
+                Some(snapshot.get_full_path(node_idx))
+            };
+            self.table_state.selected_rows.clear();
+            if node_idx != 0 {
+                self.table_state.selected_rows.insert(node_idx);
+            }
+            self.scroll_to_selected = true;
+            ui.ctx().request_repaint();
+        }
+    }
+
+    fn draw_treemap_zoom_controls(&mut self, ui: &mut egui::Ui, snapshot: &FileArenaSnapshot) {
+        let zoom_root = self.treemap_chart.zoom_root;
+
+        if zoom_root != 0 {
+            if ui
+                .button(t!("zoom-up"))
+                .on_hover_text(format!("{} (Alt+Up / Backspace)", t!("zoom-up-level")))
+                .clicked()
+            {
+                let parent = snapshot
+                    .nodes
+                    .get(zoom_root as usize)
+                    .map_or(crate::arena::NO_INDEX, |n| n.parent);
+                self.treemap_chart.zoom_root = if parent == crate::arena::NO_INDEX {
+                    0
+                } else {
+                    parent
+                };
+                self.zoom_path = if self.treemap_chart.zoom_root == 0 {
+                    None
+                } else {
+                    Some(snapshot.get_full_path(self.treemap_chart.zoom_root))
+                };
+                self.table_state.selected_rows.clear();
+                if self.treemap_chart.zoom_root != 0 {
+                    self.table_state
+                        .selected_rows
+                        .insert(self.treemap_chart.zoom_root);
+                }
+                self.scroll_to_selected = true;
+                ui.ctx().request_repaint();
+            }
+
+            if ui
+                .button(t!("zoom-reset"))
+                .on_hover_text("Reset Zoom (Esc)")
+                .clicked()
+            {
+                self.treemap_chart.zoom_root = 0;
+                self.zoom_path = None;
+                ui.ctx().request_repaint();
+            }
+
+            ui.separator();
+        }
+
+        // Build ancestor path from root (0) to zoom_root
+        let mut ancestors = SmallVec::<[u32; 16]>::new();
+        let mut curr = Some(zoom_root);
+        while let Some(idx) = curr {
+            ancestors.push(idx);
+            if idx == 0 || (idx as usize) >= snapshot.nodes.len() {
+                break;
+            }
+            curr = snapshot.nodes[idx as usize].parent_opt();
+        }
+        ancestors.reverse();
+
+        let max_visible = 4;
+        let truncate = ancestors.len() > max_visible + 1;
+
+        if truncate {
+            // First item (Root)
+            self.draw_breadcrumb_item(ui, snapshot, ancestors[0], false);
+            ui.weak("›");
+
+            // Middle collapsed items dropdown
+            ui.menu_button("…", |ui| {
+                for &node_idx in &ancestors[1..ancestors.len() - max_visible] {
+                    let name = snapshot
+                        .string_pool
+                        .get(snapshot.nodes[node_idx as usize].name_id)
+                        .unwrap_or("");
+                    if ui.button(format!("📁 {name}")).clicked() {
+                        self.treemap_chart.zoom_root = node_idx;
+                        self.zoom_path = Some(snapshot.get_full_path(node_idx));
+                        self.table_state.selected_rows.clear();
+                        self.table_state.selected_rows.insert(node_idx);
+                        self.scroll_to_selected = true;
+                        ui.ctx().request_repaint();
+                        ui.close_kind(egui::UiKind::Menu);
+                    }
+                }
+            });
+
+            // Last `max_visible` items
+            for &node_idx in &ancestors[ancestors.len() - max_visible..] {
+                ui.weak("›");
+                self.draw_breadcrumb_item(ui, snapshot, node_idx, node_idx == zoom_root);
+            }
+        } else {
+            for (i, &node_idx) in ancestors.iter().enumerate() {
+                if i > 0 {
+                    ui.weak("›");
+                }
+                self.draw_breadcrumb_item(ui, snapshot, node_idx, node_idx == zoom_root);
+            }
+        }
+    }
+
+    /// Renders a unified top row controls bar inside visualizer panel viewports.
+    pub(crate) fn draw_central_panel_header(
+        &mut self,
+        ui: &mut egui::Ui,
+        snapshot: &FileArenaSnapshot,
+    ) {
+        ui.horizontal(|ui| {
+            // Left side: Active mode title or layout controls
+            match self.vis_mode {
+                VisMode::Treemap => {
+                    ui.heading(
+                        egui::RichText::new(t!("vis-mode-treemap"))
+                            .strong()
+                            .color(ui.visuals().strong_text_color()),
+                    );
+
+                    if !snapshot.nodes.is_empty() {
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                        self.draw_treemap_zoom_controls(ui, snapshot);
+                    }
+                }
+                VisMode::Plots => {
+                    ui.horizontal(|ui| {
+                        ui.heading(
+                            egui::RichText::new(t!("vis-mode-plots"))
+                                .strong()
+                                .color(ui.visuals().strong_text_color()),
+                        );
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+                        ui.label(t!("select-plot-label"));
+
+                        let plot_combo_id = if self.layout_mode == LayoutMode::Classic {
+                            "plot_type_combo"
+                        } else {
+                            "plot_type_combo_windirstat"
+                        };
+
+                        egui::ComboBox::from_id_salt(plot_combo_id)
+                            .selected_text(match self.plot_type {
+                                PlotType::SizeDistribution => t!("plot-size-distribution"),
+                                PlotType::AgeSizeScatter => t!("plot-age-size"),
+                                PlotType::DirComposition => t!("plot-dir-composition"),
+                                PlotType::ExtensionBoxplot => t!("plot-extension-boxplot"),
+                                PlotType::TemporalTimeline => t!("plot-temporal-timeline"),
+                                PlotType::DeduplicatorWaste => t!("plot-deduplicator-waste"),
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.plot_type,
+                                    PlotType::SizeDistribution,
+                                    t!("plot-size-distribution"),
+                                );
+                                ui.selectable_value(
+                                    &mut self.plot_type,
+                                    PlotType::AgeSizeScatter,
+                                    t!("plot-age-size"),
+                                );
+                                ui.selectable_value(
+                                    &mut self.plot_type,
+                                    PlotType::DirComposition,
+                                    t!("plot-dir-composition"),
+                                );
+                                ui.selectable_value(
+                                    &mut self.plot_type,
+                                    PlotType::ExtensionBoxplot,
+                                    t!("plot-extension-boxplot"),
+                                );
+                                ui.selectable_value(
+                                    &mut self.plot_type,
+                                    PlotType::TemporalTimeline,
+                                    t!("plot-temporal-timeline"),
+                                );
+                                ui.selectable_value(
+                                    &mut self.plot_type,
+                                    PlotType::DeduplicatorWaste,
+                                    t!("plot-deduplicator-waste"),
+                                );
+                            });
+                    });
+                }
+                VisMode::Deduplicator => {
+                    ui.heading(
+                        egui::RichText::new(t!("vis-mode-deduplicator"))
+                            .strong()
+                            .color(ui.visuals().strong_text_color()),
+                    );
+
+                    // Determine if any duplicate group is fully selected (meaning the original and all copies are selected)
+                    let mut fully_selected_groups_info = Vec::new();
+                    {
+                        let guard = self.deduplicator_results.read();
+                        for group in &guard.groups {
+                            let all_selected = group
+                                .nodes
+                                .iter()
+                                .all(|&idx| self.selected_duplicates.contains(&idx));
+                            if all_selected && let Some(&first_idx) = group.nodes.first() {
+                                let filename = snapshot
+                                    .string_pool
+                                    .get(snapshot.nodes[first_idx as usize].name_id)
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                fully_selected_groups_info.push((filename, group.nodes.clone()));
+                            }
+                        }
+                    }
+
+                    if !fully_selected_groups_info.is_empty() {
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_millis(16));
+
+                        let time = ui.input(|i| i.time);
+                        #[allow(clippy::cast_possible_truncation)]
+                        let pulse = 0.5f64.mul_add((time * 6.0).sin(), 0.5) as f32;
+                        let alpha = 0.6f32.mul_add(pulse, 0.4);
+                        let warning_red = theme::get_warning_red();
+                        let glow_color = warning_red.linear_multiply(alpha * 0.15);
+                        let text_color = warning_red.linear_multiply(0.4f32.mul_add(pulse, 0.6));
+
+                        let frame = egui::Frame::new()
+                            .fill(glow_color)
+                            .stroke(egui::Stroke::new(
+                                1.0f32,
+                                warning_red.linear_multiply(alpha * 0.4),
+                            ))
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .corner_radius(4.0);
+
+                        let response = frame
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(t!("dedup-warning-title"))
+                                            .strong()
+                                            .color(text_color),
+                                    );
+                                    ui.separator();
+                                    ui.label(
+                                        egui::RichText::new(t!(
+                                            "dedup-warning-desc",
+                                            { "count" => fully_selected_groups_info.len() }
+                                        ))
+                                        .color(ui.visuals().text_color()),
+                                    );
+                                });
+                            })
+                            .response;
+
+                        response.on_hover_ui(|ui| {
+                            ui.set_max_width(450.0);
+                            ui.heading(
+                                egui::RichText::new(t!("dedup-warning-no-original"))
+                                    .color(theme::get_warning_red())
+                                    .strong(),
+                            );
+                            ui.label(t!("dedup-warning-details"));
+                            ui.separator();
+
+                            egui::ScrollArea::vertical()
+                                .max_height(250.0)
+                                .show(ui, |ui| {
+                                    for (filename, nodes) in &fully_selected_groups_info {
+                                        ui.vertical(|ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.colored_label(theme::get_warning_red(), "🔥");
+                                                ui.strong(filename);
+                                                ui.weak(t!(
+                                                    "dedup-copies-selected",
+                                                    { "count" => nodes.len() }
+                                                ));
+                                            });
+                                            for &idx in nodes {
+                                                let path = snapshot.get_full_path(idx);
+                                                let cleaned_path =
+                                                    crate::arena::clean_unc_path(&path);
+                                                ui.small(format!("  - {cleaned_path}"));
+                                            }
+                                            ui.add_space(4.0);
+                                        });
+                                    }
+                                });
+                        });
+                    }
+                }
+                VisMode::Docker => {
+                    ui.heading(
+                        egui::RichText::new(t!("vis-mode-docker"))
+                            .strong()
+                            .color(ui.visuals().strong_text_color()),
+                    );
+                }
+                VisMode::Cleanup => {
+                    ui.heading(
+                        egui::RichText::new(t!("vis-mode-cleanup"))
+                            .strong()
+                            .color(ui.visuals().strong_text_color()),
+                    );
+                }
+            }
+
+            // Right side: Active Visualizer Modes
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Cleanup trashing needs live filesystem access (native-only)
+                if crate::IS_NATIVE || !crate::HIDE_NA_UI {
+                    let res = ui
+                        .add_enabled_ui(crate::IS_NATIVE, |ui| {
+                            ui.selectable_value(
+                                &mut self.vis_mode,
+                                VisMode::Cleanup,
+                                t!("vis-mode-cleanup"),
+                            )
+                        })
+                        .inner;
+                    if !crate::IS_NATIVE {
+                        res.on_disabled_hover_text(t!("web-not-available"));
+                    }
+                }
+                // Docker disk usage requires live filesystem access (native-only)
+                if crate::IS_NATIVE || !crate::HIDE_NA_UI {
+                    let res = ui
+                        .add_enabled_ui(crate::IS_NATIVE, |ui| {
+                            ui.selectable_value(
+                                &mut self.vis_mode,
+                                VisMode::Docker,
+                                t!("vis-mode-docker"),
+                            )
+                        })
+                        .inner;
+                    if !crate::IS_NATIVE {
+                        res.on_disabled_hover_text(t!("web-not-available"));
+                    }
+                }
+                // Deduplication requires live filesystem access (native-only)
+                if crate::IS_NATIVE || !crate::HIDE_NA_UI {
+                    let res = ui
+                        .add_enabled_ui(crate::IS_NATIVE, |ui| {
+                            ui.selectable_value(
+                                &mut self.vis_mode,
+                                VisMode::Deduplicator,
+                                t!("vis-mode-deduplicator"),
+                            )
+                        })
+                        .inner;
+                    if !crate::IS_NATIVE {
+                        res.on_disabled_hover_text(t!("web-not-available"));
+                    }
+                }
+                ui.selectable_value(&mut self.vis_mode, VisMode::Plots, t!("vis-mode-plots"));
+                ui.selectable_value(&mut self.vis_mode, VisMode::Treemap, t!("vis-mode-treemap"));
+            });
+        });
+    }
+
+    pub(crate) fn process_commands(
+        &mut self,
+        ctx: &egui::Context,
+        snapshot: &Arc<FileArenaSnapshot>,
+    ) {
+        while let Ok(command) = self.command_rx.try_recv() {
+            match command {
+                crate::gui::operations::AppCommand::ScrollToSelected => {
+                    self.scroll_to_selected = true;
+                }
+                crate::gui::operations::AppCommand::ZoomTreemap(target) => {
+                    if (target as usize) < snapshot.nodes.len() {
+                        self.treemap_chart.zoom_root = target;
+                        self.zoom_path = if target == 0 {
+                            None
+                        } else {
+                            Some(snapshot.get_full_path(target))
+                        };
+                        self.vis_mode = VisMode::Treemap;
+                        self.table_state.selected_rows.clear();
+                        self.table_state.selected_rows.insert(target);
+                        self.scroll_to_selected = true;
+                        ctx.request_repaint();
+                    }
+                }
+                crate::gui::operations::AppCommand::RevealInExplorer(target) => {
+                    if (target as usize) < snapshot.nodes.len() {
+                        self.reveal_node_in_explorer(snapshot, target);
+                        ctx.request_repaint();
+                    }
+                }
+                crate::gui::operations::AppCommand::LoadSnapshotBytes { name, bytes } => {
+                    if let Err(e) = self.load_snapshot_bytes(&name, &bytes) {
+                        crate::gui::toast_error(format!("Failed to load snapshot: {e}"));
+                    }
+                }
+                crate::gui::operations::AppCommand::RefreshSubtrees(dirs) => {
+                    self.refresh_directory_subtrees(&dirs);
+                }
+                crate::gui::operations::AppCommand::ShowTrashModal(nodes) => {
+                    self.delete_node_indices = nodes;
+                    if self.trash_confirmation {
+                        self.active_modal = Some(ActiveModal::Trash);
+                        self.delete_confirm_checked = false;
+                        self.remember_confirmation = false;
+                    } else {
+                        self.execute_deletion(&self.delete_node_indices.clone(), true, ctx);
+                        self.delete_node_indices.clear();
+                    }
+                }
+                crate::gui::operations::AppCommand::ShowDeleteModal(nodes) => {
+                    self.delete_node_indices = nodes;
+                    if self.deletion_confirmation {
+                        self.active_modal = Some(ActiveModal::Delete);
+                        self.delete_confirm_checked = false;
+                        self.remember_confirmation = false;
+                    } else {
+                        self.execute_deletion(&self.delete_node_indices.clone(), false, ctx);
+                        self.delete_node_indices.clear();
+                    }
+                }
+                crate::gui::operations::AppCommand::RefreshDockerInventory => {
+                    self.start_docker_collection();
+                }
+                crate::gui::operations::AppCommand::ShowDockerDeleteResourceModal(targets) => {
+                    // Fresh modal state: the force flag defaults OFF.
+                    self.docker_view.delete_force = false;
+                    self.active_modal = Some(ActiveModal::DockerDeleteResource { targets });
+                }
+                crate::gui::operations::AppCommand::BackgroundOpCompleted(result) => {
+                    match result {
+                        crate::gui::operations::BackgroundOpResult::Deletion {
+                            successfully_deleted,
+                            failures,
+                            to_trash,
+                            snapshot: op_snapshot,
+                        } => {
+                            if to_trash {
+                                if !successfully_deleted.is_empty() {
+                                    crate::gui::toast_success(format!(
+                                        "Moved {} item(s) to trash",
+                                        successfully_deleted.len()
+                                    ));
+                                }
+                                if !failures.is_empty() {
+                                    let perm_count =
+                                        failures.iter().filter(|&(_, _, is_perm)| *is_perm).count();
+                                    if perm_count == failures.len() {
+                                        crate::gui::toast_error(format!(
+                                            "Failed to move {} item(s) to trash (Permission Denied). Try running with elevated privileges.",
+                                            failures.len()
+                                        ));
+                                    } else if perm_count > 0 {
+                                        crate::gui::toast_error(format!(
+                                            "Failed to move {} item(s) to trash ({} due to Permission Denied).",
+                                            failures.len(),
+                                            perm_count
+                                        ));
+                                    } else {
+                                        crate::gui::toast_error(format!(
+                                            "Failed to move {} item(s) to trash",
+                                            failures.len()
+                                        ));
+                                    }
+                                }
+                            } else {
+                                if !successfully_deleted.is_empty() {
+                                    crate::gui::toast_success(format!(
+                                        "Permanently deleted {} item(s)",
+                                        successfully_deleted.len()
+                                    ));
+                                }
+                                if !failures.is_empty() {
+                                    let perm_count =
+                                        failures.iter().filter(|&(_, _, is_perm)| *is_perm).count();
+                                    if perm_count == failures.len() {
+                                        crate::gui::toast_error(format!(
+                                            "Failed to delete {} item(s) (Permission Denied). Try running with elevated privileges.",
+                                            failures.len()
+                                        ));
+                                    } else if perm_count > 0 {
+                                        crate::gui::toast_error(format!(
+                                            "Failed to delete {} item(s) ({} due to Permission Denied).",
+                                            failures.len(),
+                                            perm_count
+                                        ));
+                                    } else {
+                                        crate::gui::toast_error(format!(
+                                            "Failed to delete {} item(s)",
+                                            failures.len()
+                                        ));
+                                    }
+                                }
+                            }
+
+                            if Arc::ptr_eq(snapshot, &op_snapshot)
+                                && !successfully_deleted.is_empty()
+                            {
+                                {
+                                    let mut results = self.deduplicator_results.write();
+                                    for group in &mut results.groups {
+                                        let mut i = 0;
+                                        while i < group.nodes.len() {
+                                            if successfully_deleted.contains(&group.nodes[i]) {
+                                                group.nodes.remove(i);
+                                                if i < group.file_ids.len() {
+                                                    group.file_ids.remove(i);
+                                                }
+                                            } else {
+                                                i += 1;
+                                            }
+                                        }
+                                    }
+                                    results.groups.retain(|group| group.nodes.len() >= 2);
+                                    results.rebuild_flat_rows(snapshot);
+                                }
+
+                                self.selected_duplicates
+                                    .retain(|idx| !successfully_deleted.contains(idx));
+
+                                // Clean up selections inside RoaringBitmap
+                                for &idx in &successfully_deleted {
+                                    self.table_state.selected_rows.remove(idx);
+                                }
+
+                                self.remove_nodes_from_snapshot(&successfully_deleted);
+
+                                let new_snap = self.shared_state.current_snapshot.load();
+                                if let Some(ref path) = self.zoom_path {
+                                    if let Some(idx) = new_snap.resolve_path_index(path) {
+                                        if (idx as usize) < new_snap.nodes.len()
+                                            && new_snap.nodes[idx as usize].size > 0
+                                        {
+                                            self.treemap_chart.zoom_root = idx;
+                                        } else {
+                                            self.treemap_chart.zoom_root = 0;
+                                            self.zoom_path = None;
+                                        }
+                                    } else {
+                                        self.treemap_chart.zoom_root = 0;
+                                        self.zoom_path = None;
+                                    }
+                                }
+                            }
+                        }
+                        crate::gui::operations::BackgroundOpResult::Hardlinking {
+                            successfully_linked,
+                            failures,
+                            snapshot: op_snapshot,
+                        } => {
+                            if !successfully_linked.is_empty() {
+                                crate::gui::toast_success(format!(
+                                    "Successfully replaced {} duplicate(s) with hardlinks",
+                                    successfully_linked.len()
+                                ));
+                            }
+                            if !failures.is_empty() {
+                                let perm_count =
+                                    failures.iter().filter(|&(_, _, is_perm)| *is_perm).count();
+                                if perm_count == failures.len() {
+                                    crate::gui::toast_error(format!(
+                                        "Failed to hardlink {} duplicate(s) (Permission Denied).",
+                                        failures.len()
+                                    ));
+                                } else if perm_count > 0 {
+                                    crate::gui::toast_error(format!(
+                                        "Failed to hardlink {} duplicate(s) ({} due to Permission Denied).",
+                                        failures.len(),
+                                        perm_count
+                                    ));
+                                } else {
+                                    crate::gui::toast_error(format!(
+                                        "Failed to hardlink {} duplicate(s)",
+                                        failures.len()
+                                    ));
+                                }
+                            }
+
+                            if Arc::ptr_eq(snapshot, &op_snapshot)
+                                && !successfully_linked.is_empty()
+                            {
+                                {
+                                    let mut results = self.deduplicator_results.write();
+                                    for group in &mut results.groups {
+                                        let has_any = group
+                                            .nodes
+                                            .iter()
+                                            .any(|n| successfully_linked.contains(n));
+                                        if has_any {
+                                            for (i, &node_idx) in group.nodes.iter().enumerate() {
+                                                let path_str = snapshot.get_full_path(node_idx);
+                                                if let Ok(meta) = std::fs::metadata(&path_str) {
+                                                    let file_id = crate::file_id::get_file_id(
+                                                        std::path::Path::new(&path_str),
+                                                        &meta,
+                                                    );
+                                                    if i < group.file_ids.len() {
+                                                        group.file_ids[i] = file_id;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    results.rebuild_flat_rows(snapshot);
+                                }
+
+                                self.selected_duplicates
+                                    .retain(|idx| !successfully_linked.contains(idx));
+                            }
+                        }
+                        crate::gui::operations::BackgroundOpResult::Softlinking {
+                            successfully_linked,
+                            failures,
+                            snapshot: op_snapshot,
+                        } => {
+                            if !successfully_linked.is_empty() {
+                                crate::gui::toast_success(format!(
+                                    "Successfully replaced {} duplicate(s) with softlinks",
+                                    successfully_linked.len()
+                                ));
+                            }
+                            if !failures.is_empty() {
+                                let perm_count =
+                                    failures.iter().filter(|&(_, _, is_perm)| *is_perm).count();
+                                if perm_count == failures.len() {
+                                    crate::gui::toast_error(format!(
+                                        "Failed to softlink {} duplicate(s) (Permission Denied).",
+                                        failures.len()
+                                    ));
+                                } else if perm_count > 0 {
+                                    crate::gui::toast_error(format!(
+                                        "Failed to softlink {} duplicate(s) ({} due to Permission Denied).",
+                                        failures.len(),
+                                        perm_count
+                                    ));
+                                } else {
+                                    crate::gui::toast_error(format!(
+                                        "Failed to softlink {} duplicate(s)",
+                                        failures.len()
+                                    ));
+                                }
+                            }
+
+                            if Arc::ptr_eq(snapshot, &op_snapshot)
+                                && !successfully_linked.is_empty()
+                            {
+                                {
+                                    let mut results = self.deduplicator_results.write();
+                                    for group in &mut results.groups {
+                                        let mut i = 0;
+                                        while i < group.nodes.len() {
+                                            if successfully_linked.contains(&group.nodes[i]) {
+                                                group.nodes.remove(i);
+                                                if i < group.file_ids.len() {
+                                                    group.file_ids.remove(i);
+                                                }
+                                            } else {
+                                                i += 1;
+                                            }
+                                        }
+                                    }
+                                    results.groups.retain(|group| group.nodes.len() >= 2);
+                                    results.rebuild_flat_rows(snapshot);
+                                }
+
+                                self.selected_duplicates
+                                    .retain(|idx| !successfully_linked.contains(idx));
+
+                                // Clean up selections inside RoaringBitmap
+                                for &idx in &successfully_linked {
+                                    self.table_state.selected_rows.remove(idx);
+                                }
+
+                                self.remove_nodes_from_snapshot(&successfully_linked);
+                            }
+                        }
+                    }
+                    self.active_modal = None;
+                }
+            }
+        }
+    }
+}
+
+impl eframe::App for GuiApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(all(feature = "online", not(target_family = "wasm")))]
+        ctx.plugin_or_default::<egui_async::EguiAsyncPlugin>();
+
+        egui_extras::install_image_loaders(ctx);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+
+        // Install the subsetted non-Latin fallback fonts before the first
+        // frame lays out text; no-op when the build had no font sources.
+        if !self.fonts_installed {
+            fonts::install_fonts(&ctx);
+            self.fonts_installed = true;
+        }
+
+        // Process any deferred command line paths on the first draw pass
+        self.process_pending_initial_path();
+
+        // Fetch current snapshot
+        let snapshot = self.shared_state.current_snapshot.load();
+        let is_scanning = self.shared_state.is_scanning.load(Ordering::SeqCst);
+        let snapshot_ptr = std::sync::Arc::as_ptr(&snapshot.nodes) as usize;
+
+        // Escape: always allowed to dismiss active modal or clear search focus/query
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if self.active_modal.is_some() {
+                self.active_modal = None;
+            } else if !self.search_query.is_empty() {
+                self.search_query.clear();
+                self.table_state.filter_cache_dirty = true;
+            }
+        }
+
+        // Global Keyboard Shortcuts (active when not typing into text input fields)
+        if !ctx.egui_wants_keyboard_input() {
+            // New Scan (Cmd+O / Ctrl+O)
+            if ctx.input_mut(|i| i.consume_shortcut(&shortcuts::SHORTCUT_NEW_SCAN)) {
+                self.open_scan_modal();
+            }
+
+            // Rescan (Cmd+R / Ctrl+R or F5)
+            if ctx.input_mut(|i| {
+                i.consume_shortcut(&shortcuts::SHORTCUT_RESCAN)
+                    || i.consume_shortcut(&shortcuts::SHORTCUT_RESCAN_F5)
+            }) {
+                self.rescan_current_root();
+            }
+
+            // Save Snapshot (Cmd+S / Ctrl+S)
+            if ctx.input_mut(|i| i.consume_shortcut(&shortcuts::SHORTCUT_SAVE_SNAPSHOT)) {
+                self.prompt_save_snapshot(&snapshot);
+            }
+
+            // Focus Filter / Search (Cmd+F / Ctrl+F)
+            if ctx.input_mut(|i| i.consume_shortcut(&shortcuts::SHORTCUT_SEARCH)) {
+                self.focus_search = true;
+            }
+
+            // Close active modal, search, or scan (Cmd+W / Ctrl+W)
+            if ctx.input_mut(|i| i.consume_shortcut(&shortcuts::SHORTCUT_CLOSE)) {
+                if self.active_modal.is_some() {
+                    self.active_modal = None;
+                } else if !self.search_query.is_empty() {
+                    self.search_query.clear();
+                    self.table_state.filter_cache_dirty = true;
+                } else if !snapshot.nodes.is_empty() {
+                    self.reset_state();
+                }
+            }
+
+            // Quit Application (Cmd+Q / Ctrl+Q)
+            if ctx.input_mut(|i| i.consume_shortcut(&shortcuts::SHORTCUT_QUIT)) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+
+            // Panel Toggles (F9 / F11)
+            if self.layout_mode == LayoutMode::Classic
+                && ctx.input_mut(|i| i.consume_shortcut(&shortcuts::SHORTCUT_TOGGLE_LEFT_PANEL))
+            {
+                self.left_panel_collapsed = !self.left_panel_collapsed;
+            }
+            if ctx.input_mut(|i| i.consume_shortcut(&shortcuts::SHORTCUT_TOGGLE_RIGHT_PANEL)) {
+                self.right_panel_collapsed = !self.right_panel_collapsed;
+            }
+
+            // Collapse All (Shift+Cmd+C / Shift+Ctrl+C)
+            if ctx.input_mut(|i| i.consume_shortcut(&shortcuts::SHORTCUT_COLLAPSE_ALL)) {
+                self.table_state.expanded_rows.clear();
+            }
+
+            // Help / About (F1)
+            if ctx.input_mut(|i| i.consume_shortcut(&shortcuts::SHORTCUT_ABOUT)) {
+                self.active_modal = Some(ActiveModal::About);
+            }
+
+            // Up One Level (Alt+Up or Backspace when treemap zoomed or table row selected)
+            if ctx.input_mut(|i| {
+                i.consume_shortcut(&shortcuts::SHORTCUT_UP_ONE_LEVEL)
+                    || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)
+            }) {
+                if self.treemap_chart.zoom_root != 0 {
+                    let parent = snapshot
+                        .nodes
+                        .get(self.treemap_chart.zoom_root as usize)
+                        .map_or(crate::arena::NO_INDEX, |n| n.parent);
+                    self.treemap_chart.zoom_root = if parent == crate::arena::NO_INDEX {
+                        0
+                    } else {
+                        parent
+                    };
+                    self.zoom_path = if self.treemap_chart.zoom_root == 0 {
+                        None
+                    } else {
+                        Some(snapshot.get_full_path(self.treemap_chart.zoom_root))
+                    };
+                    self.table_state.selected_rows.clear();
+                    if self.treemap_chart.zoom_root != 0 {
+                        self.table_state
+                            .selected_rows
+                            .insert(self.treemap_chart.zoom_root);
+                    }
+                    self.scroll_to_selected = true;
+                    ctx.request_repaint();
+                } else if let Some(idx) = self.table_state.selected_rows.iter().next() {
+                    let parent = snapshot
+                        .nodes
+                        .get(idx as usize)
+                        .map_or(crate::arena::NO_INDEX, |n| n.parent);
+                    if parent != crate::arena::NO_INDEX {
+                        self.table_state.selected_rows.clear();
+                        self.table_state.selected_rows.insert(parent);
+                        self.scroll_to_selected = true;
+                        ctx.request_repaint();
+                    }
+                }
+            }
+
+            // Zoom Selection into Treemap (Enter)
+            if ctx.input_mut(|i| i.consume_shortcut(&shortcuts::SHORTCUT_ZOOM_SELECTION))
+                && let Some(idx) = self.table_state.selected_rows.iter().next()
+                && (idx as usize) < snapshot.nodes.len()
+            {
+                let target = if snapshot.nodes[idx as usize].is_directory() {
+                    idx
+                } else {
+                    snapshot.nodes[idx as usize].parent
+                };
+                if target != crate::arena::NO_INDEX {
+                    self.treemap_chart.zoom_root = target;
+                    self.zoom_path = if target == 0 {
+                        None
+                    } else {
+                        Some(snapshot.get_full_path(target))
+                    };
+                    ctx.request_repaint();
+                }
+            }
+
+            // Delete keyboard shortcuts (Delete / Shift + Delete)
+            if !is_scanning
+                && !self.table_state.selected_rows.is_empty()
+                && ctx.input(|i| i.key_pressed(egui::Key::Delete))
+            {
+                let shift = ctx.input(|i| i.modifiers.shift);
+                self.delete_node_indices = self.table_state.selected_rows.iter().collect();
+                if shift {
+                    if self.deletion_confirmation {
+                        self.active_modal = Some(ActiveModal::Delete);
+                        self.delete_confirm_checked = false;
+                        self.remember_confirmation = false;
+                    } else {
+                        self.execute_deletion(&self.delete_node_indices.clone(), false, &ctx);
+                        self.delete_node_indices.clear();
+                    }
+                } else if self.trash_confirmation {
+                    self.active_modal = Some(ActiveModal::Trash);
+                    self.delete_confirm_checked = false;
+                    self.remember_confirmation = false;
+                } else {
+                    self.execute_deletion(&self.delete_node_indices.clone(), true, &ctx);
+                    self.delete_node_indices.clear();
+                }
+            }
+        }
+
+        // Handle drag & drop of folders to scan (grants sandbox permissions automatically on macOS)
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
+            for dropped in dropped_files {
+                let path = dropped.path();
+                if path.is_dir() {
+                    self.start_scan(path.to_path_buf());
+                    self.active_modal = None;
+                    break;
+                }
+            }
+        }
+
+        if self.last_rendered_snapshot_ptr != snapshot_ptr {
+            self.table_state.filter_cache_dirty = true;
+            // A rescan re-indexes every node under the refreshed directory, which
+            // would otherwise collapse the expanded folders there. If a rescan
+            // captured the expanded paths, re-resolve them against this snapshot.
+            if let Some(paths) = self.pending_expand_restore.take() {
+                self.table_state.expanded_rows.clear();
+                self.table_state.expanded_rows.insert(0); // keep the scan root expanded
+                for path in &paths {
+                    if let Some(idx) = snapshot.resolve_path_index(path)
+                        && idx != 0
+                    {
+                        self.table_state.expanded_rows.insert(idx);
+                    }
+                }
+            }
+            if let Some(ref path) = self.zoom_path {
+                if let Some(idx) = snapshot.resolve_path_index(path) {
+                    self.treemap_chart.zoom_root = idx;
+                } else {
+                    self.treemap_chart.zoom_root = 0;
+                    self.zoom_path = None;
+                }
+            }
+            self.last_rendered_snapshot_ptr = snapshot_ptr;
+        }
+
+        // --- Handle Table commands sent from standard and context-menu operations ---
+        self.process_commands(&ctx, &snapshot);
+
+        // Publish a finished cleanup analysis on the next frame; the toast
+        // for scan-completion-triggered analyses fires here, without the tab
+        // needing to be open. An empty pending slot is a cheap no-op.
+        self.publish_pending_report();
+
+        // Background Modal polling processing for custom TableOperations
+        for op_group in &mut self.operations.groups {
+            for op in op_group {
+                if op.is_modal_open() {
+                    let _ = op.poll(ui, &mut self.table_state);
+                }
+            }
+        }
+
+        // Re-load `is_scanning` here instead of reusing the frame-level snapshot
+        // captured near the top of the frame
+        let is_scanning_now = self.shared_state.is_scanning.load(Ordering::SeqCst);
+        if !is_scanning_now && let Some(start) = self.scan_start_time {
+            let cancelled = self.shared_state.scan_cancel.load(Ordering::SeqCst);
+            if cancelled {
+                self.reset_state();
+            } else {
+                self.total_scan_duration = Some(start.elapsed());
+                self.scan_start_time = None;
+                // Scan finished: kick the cleanup analysis over the final
+                // snapshot; a large enough reclaim total raises a one-shot
+                // notification when the report is published.
+                self.start_cleanup_analysis(true);
+            }
+        }
+
+        // Repaint during scan to show live progress, or continuously while selected to drive the glow animation
+        if is_scanning {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        } else if !self.table_state.selected_rows.is_empty() {
+            ctx.request_repaint();
+        } else if snapshot.nodes.is_empty() {
+            // Animating the Scan Directory button when no scan is active and no snapshot is open
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+
+        // Apply custom style
+        theme::setup_custom_style(&ctx, self.theme);
+
+        // Top Control Panel
+        egui::Panel::top("top_panel").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if let Some(prefix) = &mut self.top_panel_prefix {
+                    prefix(ui);
+                    ui.separator();
+                }
+                ui.heading(
+                    egui::RichText::new("weshtatistic")
+                        .strong()
+                        .color(ui.visuals().strong_text_color()),
+                );
+                ui.add(
+                    egui::Image::new(egui::include_image!(
+                        "../../assets/img/icon-transparent.png"
+                    ))
+                    .max_height(24.0),
+                );
+                ui.separator();
+
+                // Temporarily disable button frames to make top-level menus flat & clean
+                let saved_button_frame = ui.visuals().button_frame;
+                ui.style_mut().visuals.button_frame = false;
+
+                // Top menu buttons (File / View / Help)
+                ui.menu_button(t!("file"), |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    self.draw_file_menu_contents(ui, &snapshot);
+                });
+                ui.menu_button(t!("view"), |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+
+                    // Aligned emoji checkbox layout
+                    ui.checkbox(&mut self.monospace_paths, t!("monospace-paths"));
+
+                    ui.checkbox(&mut self.highlight_duplicates, t!("highlight-duplicates"));
+                    ui.checkbox(&mut self.treemap_borders, t!("treemap-borders"));
+                    ui.checkbox(&mut self.deletion_confirmation, t!("deletion-confirmation"));
+                    ui.checkbox(&mut self.trash_confirmation, t!("trash-confirmation"));
+
+                    ui.menu_button(t!("treemap-style"), |ui| {
+                        let styles = [
+                            (
+                                stats::treemap::TreemapStyle::VerticalGradient,
+                                t!("treemap-style-vertical"),
+                            ),
+                            (
+                                stats::treemap::TreemapStyle::OffsetVerticalGradient,
+                                t!("treemap-style-offset-vertical"),
+                            ),
+                            (
+                                stats::treemap::TreemapStyle::DiagonalGradient,
+                                t!("treemap-style-diagonal"),
+                            ),
+                            (
+                                stats::treemap::TreemapStyle::Cushion,
+                                t!("treemap-style-cushion"),
+                            ),
+                        ];
+                        for (style, label) in styles {
+                            let is_selected = self.treemap_style == style;
+                            if ui.selectable_label(is_selected, label).clicked() {
+                                self.treemap_style = style;
+                                ui.close_kind(egui::UiKind::Menu);
+                            }
+                        }
+                    });
+
+                    ui.menu_button(t!("theme"), |ui| {
+                        let themes = [
+                            (theme::ThemePreference::System, t!("theme-system")),
+                            (theme::ThemePreference::Dark, t!("theme-dark")),
+                            (
+                                theme::ThemePreference::HighContrast,
+                                t!("theme-high-contrast"),
+                            ),
+                            (theme::ThemePreference::Light, t!("theme-light")),
+                        ];
+                        for (pref, label) in themes {
+                            let is_selected = self.theme == pref;
+                            if ui.selectable_label(is_selected, label).clicked() {
+                                self.theme = pref;
+                                theme::clear_color_cache();
+                                ui.close_kind(egui::UiKind::Menu);
+                            }
+                        }
+                    });
+
+                    ui.menu_button(t!("time-format"), |ui| {
+                        for format in crate::time_utils::CommonTimeFormat::ALL {
+                            let is_selected = self.time_format.0 == format.as_str();
+                            if ui.selectable_label(is_selected, format.label()).clicked() {
+                                self.time_format =
+                                    crate::time_utils::TimeFormat(format.as_str().to_string());
+                                ui.close_kind(egui::UiKind::Menu);
+                            }
+                        }
+                    });
+
+                    ui.menu_button(t!("language"), |ui| {
+                        for locale in Locale::iter() {
+                            let is_selected = self.locale == locale;
+                            if ui.selectable_label(is_selected, locale.as_str()).clicked() {
+                                locale.apply();
+                                self.locale = locale;
+                                self.locale_preference = Some(locale);
+                                ui.close_kind(egui::UiKind::Menu);
+                            }
+                        }
+                    });
+
+                    ui.separator();
+                    ui.label(t!("layout-mode"));
+                    ui.radio_value(
+                        &mut self.layout_mode,
+                        LayoutMode::Classic,
+                        t!("classic-layout"),
+                    );
+                    ui.radio_value(
+                        &mut self.layout_mode,
+                        LayoutMode::WinDirStat,
+                        t!("windirstat-layout"),
+                    );
+
+                    ui.separator();
+
+                    let is_classic = self.layout_mode == LayoutMode::Classic;
+                    if is_classic {
+                        let left_label = t!("toggle-left-panel", {
+                            "collapsed" => self.left_panel_collapsed.to_string()
+                        });
+                        if ui
+                            .add(shortcuts::button_with_shortcut_str(left_label, "F9"))
+                            .clicked()
+                        {
+                            self.left_panel_collapsed = !self.left_panel_collapsed;
+                            ui.close_kind(egui::UiKind::Menu);
+                        }
+                    }
+
+                    let right_label = t!("toggle-right-panel", {
+                        "collapsed" => self.right_panel_collapsed.to_string(),
+                        "is_classic" => is_classic.to_string()
+                    });
+                    if ui
+                        .add(shortcuts::button_with_shortcut_str(right_label, "F11"))
+                        .clicked()
+                    {
+                        self.right_panel_collapsed = !self.right_panel_collapsed;
+                        ui.close_kind(egui::UiKind::Menu);
+                    }
+
+                    ui.separator();
+                    if ui
+                        .add(shortcuts::button_with_shortcut(
+                            t!("collapse-all"),
+                            &shortcuts::SHORTCUT_COLLAPSE_ALL,
+                            ui.ctx(),
+                        ))
+                        .clicked()
+                    {
+                        self.table_state.expanded_rows.clear();
+                        ui.close_kind(egui::UiKind::Menu);
+                    }
+                });
+                ui.menu_button(t!("help"), |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    if ui
+                        .add(shortcuts::button_with_shortcut(
+                            t!("about"),
+                            &shortcuts::SHORTCUT_ABOUT,
+                            ui.ctx(),
+                        ))
+                        .clicked()
+                    {
+                        self.active_modal = Some(ActiveModal::About);
+                        ui.close_kind(egui::UiKind::Menu);
+                    }
+                    if ui.button(t!("modal-about-license-btn")).clicked() {
+                        self.selected_license_tab = LicenseTab::Weshtatistic;
+                        self.show_licenses = true;
+                        ui.close_kind(egui::UiKind::Menu);
+                    }
+                });
+
+                ui.separator();
+
+                // Scan initiation requires a native scanner backend
+                if self.scanner.is_some() || !crate::HIDE_NA_UI {
+                    let has_scanner = self.scanner.is_some();
+                    let res = ui
+                        .add_enabled_ui(has_scanner, |ui| {
+                            self.draw_scan_button(ui, is_scanning, &snapshot);
+                        })
+                        .response;
+                    if !has_scanner {
+                        res.on_disabled_hover_text(t!("web-not-available"));
+                    }
+                }
+
+                ui.add_space(10.0);
+
+                let sc_save =
+                    shortcuts::format_shortcut(ui.ctx(), &shortcuts::SHORTCUT_SAVE_SNAPSHOT);
+                if ui
+                    .button(t!("save-snapshot"))
+                    .on_hover_text(format!(
+                        "{} ({sc_save})\nSave active scan to a compressed snapshot (*.edst.zst with Zstandard)",
+                        t!("save-snapshot")
+                    ))
+                    .clicked()
+                    && !snapshot.nodes.is_empty()
+                {
+                    self.prompt_save_snapshot(&snapshot);
+                }
+
+                ui.add_space(10.0);
+
+                #[cfg(not(target_family = "wasm"))]
+                if ui.button(t!("load-snapshot")).clicked() {
+                    let file_opt = FileDialog::new()
+                        .add_filter("weshtatistic Snapshot (*.edst.zst, *.edst)", &["edst.zst", "edst", "zst"])
+                        .add_filter("All Files (*)", &["*"])
+                        .pick_file();
+                    if let Some(path) = file_opt
+                        && let Err(e) = self.load_snapshot_file(path)
+                    {
+                        crate::gui::toast_error(format!("Failed to load snapshot: {e}"));
+                    }
+                }
+
+                #[cfg(target_family = "wasm")]
+                if ui.button(t!("load-snapshot")).clicked() {
+                    // On wasm the async file picker delivers file bytes, which are
+                    // handed to the app through the regular command queue.
+                    let command_tx = self.command_tx.clone();
+                    let ctx = ui.ctx().clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        if let Some(handle) = rfd::AsyncFileDialog::new()
+                            .add_filter("weshtatistic Snapshot (*.edst.zst, *.edst)", &["edst.zst", "edst", "zst"])
+                            .add_filter("All Files (*)", &["*"])
+                            .pick_file()
+                            .await
+                        {
+                            let bytes = handle.read().await;
+                            let _ = command_tx.send(
+                                crate::gui::operations::AppCommand::LoadSnapshotBytes {
+                                    name: handle.file_name(),
+                                    bytes,
+                                },
+                            );
+                            ctx.request_repaint();
+                        }
+                    });
+                }
+
+                ui.separator();
+
+                // Live status display
+                if is_scanning {
+                    let spinner_size = 18.0;
+                    let (rect, mut response) = ui.allocate_exact_size(
+                        egui::vec2(spinner_size, spinner_size),
+                        egui::Sense::click(),
+                    );
+
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        response = response.on_hover_text(t!("scan-cancel-hover"));
+
+                        let stroke = egui::Stroke::new(2.0f32, crate::colors::WARNING_RED);
+                        let inset = 4.0;
+                        ui.painter().line_segment(
+                            [
+                                rect.left_top() + egui::vec2(inset, inset),
+                                rect.right_bottom() - egui::vec2(inset, inset),
+                            ],
+                            stroke,
+                        );
+                        ui.painter().line_segment(
+                            [
+                                rect.right_top() + egui::vec2(-inset, inset),
+                                rect.left_bottom() - egui::vec2(-inset, inset),
+                            ],
+                            stroke,
+                        );
+
+                        if response.clicked() {
+                            self.shared_state.scan_cancel.store(true, Ordering::SeqCst);
+                        }
+                    } else {
+                        ui.put(rect, egui::Spinner::new().size(spinner_size));
+                    }
+                    ui.colored_label(theme::get_color_scanning(), t!("scanning-disk"));
+                } else if self.current_scan_path.is_some() {
+                    let cancelled = self.shared_state.scan_cancel.load(Ordering::SeqCst);
+                    if cancelled {
+                        ui.colored_label(crate::colors::WARNING_RED, t!("scan-cancelled"));
+                    } else {
+                        ui.colored_label(theme::get_color_scan_complete(), t!("scan-complete"));
+                    }
+                } else {
+                    ui.label(t!("idle"));
+                }
+
+                if let Some(ref path) = self.current_scan_path {
+                    ui.separator();
+                    let path_lossy = path.to_string_lossy();
+                    let cleaned_path = crate::arena::clean_unc_path(&path_lossy);
+                    ui.label(t!("path-label", {
+                        "path" => cleaned_path.as_ref()
+                    }));
+                }
+
+                // --- Right-Aligned Concurrency Badge ---
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(ref scanner) = self.scanner {
+                        let threads = scanner.num_threads();
+                        let badge_text = t!("worker-threads", {
+                            "count" => threads
+                        });
+                        ui.colored_label(theme::get_glow_inner_core(), badge_text)
+                            .on_hover_text(t!("worker-threads-hover"));
+                    }
+                });
+
+                ui.style_mut().visuals.button_frame = saved_button_frame; // Restore default button frames
+            });
+        });
+
+        // Bottom Stats Panel
+        egui::Panel::bottom("bottom_panel").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let file_count = self
+                    .shared_state
+                    .scan_stats
+                    .files_scanned
+                    .load(Ordering::Relaxed);
+                let dir_count = self
+                    .shared_state
+                    .scan_stats
+                    .dirs_scanned
+                    .load(Ordering::Relaxed);
+                let bytes = self
+                    .shared_state
+                    .scan_stats
+                    .bytes_scanned
+                    .load(Ordering::Relaxed);
+
+                ui.label(t!("directories-count", {
+                    "count" => dir_count
+                }));
+                ui.separator();
+                ui.label(t!("files-count", {
+                    "count" => file_count
+                }));
+                ui.separator();
+                ui.label(t!("total-size", {
+                    "size" => prettier_bytes::ByteFormatter::new().format(bytes as u64).to_string()
+                }));
+
+                if is_scanning && let Some(start) = self.scan_start_time {
+                    let elapsed = start.elapsed();
+
+                    #[allow(clippy::cast_precision_loss)]
+                    let speed = bytes as f64 / elapsed.as_secs_f64();
+
+                    ui.separator();
+                    ui.label(t!("elapsed-time", {
+                        "time" => format!("{:.3}s", elapsed.as_secs_f64())
+                    }));
+                    ui.separator();
+                    ui.label(t!("scan-speed", {
+                        "speed" => prettier_bytes::ByteFormatter::new().format(speed as u64).to_string()
+                    }));
+                } else if !is_scanning && let Some(duration) = self.total_scan_duration {
+                    ui.separator();
+                    ui.label(t!("elapsed-time", {
+                        "time" => format!("{:.3}s", duration.as_secs_f64())
+                    }));
+                    ui.separator();
+                    #[allow(clippy::cast_precision_loss)]
+                    let speed = if duration.as_secs_f64() > 0.0 {
+                        bytes as f64 / duration.as_secs_f64()
+                    } else {
+                        0.0
+                    };
+                    ui.label(t!("scan-speed", {
+                        "speed" => prettier_bytes::ByteFormatter::new().format(speed as u64).to_string()
+                    }));
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.table_state.selected_rows.len() == 1 {
+                        if let Some(idx) = self.table_state.selected_rows.iter().next()
+                            && (idx as usize) < snapshot.nodes.len()
+                        {
+                            let size_str = prettier_bytes::ByteFormatter::new()
+                                .format(snapshot.nodes[idx as usize].size)
+                                .to_string();
+                            ui.strong(size_str);
+                            let path_str = snapshot.get_full_path(idx);
+                            let cleaned_path = crate::arena::clean_unc_path(&path_str);
+                            ui.label(t!("selection-path", {
+                                "path" => cleaned_path.as_ref()
+                            }));
+                        }
+                    } else if !self.table_state.selected_rows.is_empty() {
+                        let total_size: u64 = self
+                            .table_state
+                            .selected_rows
+                            .iter()
+                            .map(|idx| snapshot.nodes[idx as usize].size)
+                            .sum();
+                        let size_str = prettier_bytes::ByteFormatter::new()
+                            .format(total_size)
+                            .to_string();
+                        ui.strong(size_str);
+                        ui.label(t!("selection-items", {
+                            "count" => self.table_state.selected_rows.len()
+                        }));
+                    }
+                });
+            });
+        });
+
+        if snapshot.nodes.is_empty() && cfg!(target_family = "wasm") {
+            egui::CentralPanel::default().show(ui, |ui| {
+                self.render_welcome_screen(ui);
+            });
+        } else if self.layout_mode == LayoutMode::Classic {
+            // Left Panel - Directory Tree Explorer
+            if !self.left_panel_collapsed {
+                egui::Panel::left("left_panel")
+                    .resizable(true)
+                    .default_size(300.0)
+                    .show(ui, |ui| {
+                        self.render_classic_left_panel(ui, &snapshot);
+                    });
+            }
+
+            // Right Panel - Extension statistics
+            if !self.right_panel_collapsed {
+                self.render_extension_panel(ui);
+            }
+
+            // Central Panel - Canvas visual Treemap / Plot Panel
+            egui::CentralPanel::default().show(ui, |ui| {
+                self.render_classic_central_panel(ui, &snapshot);
+            });
+        } else {
+            self.render_windirstat_layout(ui, &snapshot);
+        }
+
+        // Render any active modals
+        self.render_modals(&ctx, &snapshot);
+
+        // Show toast notifications
+        show_toasts(&ctx);
+
+        #[cfg(feature = "profile-tracy")]
+        {
+            ui.ctx().request_repaint();
+            tracy_client::frame_mark();
+        }
+
+        // Batched preference saving evaluated at frame exit
+        let current_prefs = crate::preferences::UserPreferences {
+            monospace_paths: self.monospace_paths,
+            highlight_duplicates: self.highlight_duplicates,
+            time_format: self.time_format.clone(),
+            deletion_confirmation: self.deletion_confirmation,
+            trash_confirmation: self.trash_confirmation,
+            treemap_borders: self.treemap_borders,
+            theme: self.theme,
+            treemap_style: self.treemap_style,
+            locale: self.locale_preference,
+        };
+
+        if current_prefs != self.last_saved_preferences {
+            crate::preferences::save_preferences(&current_prefs);
+            self.last_saved_preferences = current_prefs;
+        }
+    }
+}
+
+impl GuiApp {
+    fn render_classic_left_panel(&mut self, ui: &mut egui::Ui, snapshot: &FileArenaSnapshot) {
+        ui.vertical(|ui| {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.strong(t!("search-filter-label"));
+
+                // Lay out control elements from right-to-left to prevent layout feedback loops
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // 1. Far right: Regular Expression matching (.*)
+                    let reg = self.filter_regex;
+                    let reg_btn = ui
+                        .selectable_label(reg, egui::RichText::new(".*").strong())
+                        .on_hover_text(t!("search-use-regex"));
+                    if reg_btn.clicked() {
+                        self.filter_regex = !reg;
+                    }
+
+                    // 2. Middle-right: Match Case Sensitivity (Aa)
+                    let case_sens = self.filter_case_sensitive;
+                    let case_btn = ui
+                        .selectable_label(case_sens, egui::RichText::new("Aa").strong())
+                        .on_hover_text(t!("search-match-case"));
+                    if case_btn.clicked() {
+                        self.filter_case_sensitive = !case_sens;
+                    }
+
+                    // 3. Clear button
+                    if !self.search_query.is_empty() && ui.button("❌").clicked() {
+                        self.search_query.clear();
+                    }
+
+                    // 4. Remaining middle-left: TextEdit box (safe, non-recursive width assignment)
+                    let remaining_width = ui.available_width();
+                    let sc_search =
+                        shortcuts::format_shortcut(ui.ctx(), &shortcuts::SHORTCUT_SEARCH);
+                    let resp = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.search_query)
+                                .id_salt("filter_text_edit")
+                                .hint_text(format!("Filter ({sc_search})…"))
+                                .desired_width(remaining_width.max(10.0)),
+                        )
+                        .on_hover_text(format!("{} ({sc_search})", t!("search-filter-label")));
+                    if self.focus_search {
+                        resp.request_focus();
+                        self.focus_search = false;
+                    }
+                });
+            });
+            ui.add_space(4.0);
+            if !snapshot.nodes.is_empty() {
+                self.draw_custom_operations_toolbar(ui, snapshot);
+                ui.add_space(4.0);
+            }
+            ui.separator();
+
+            if snapshot.nodes.is_empty() {
+                ui.centered_and_justified(|ui| {
+                    ui.label(t!("explorer-empty-state"));
+                });
+            } else {
+                // Auto-expand the root node (0) if expanded_rows is empty
+                if self.table_state.expanded_rows.is_empty() {
+                    self.table_state.expanded_rows.insert(0);
+                }
+
+                let mut visible_nodes = Vec::new();
+                self.flatten_visible_tree(snapshot, 0, 0, &mut visible_nodes);
+
+                // Fetch the exact layout spacing variables
+                let row_height = ui.spacing().interact_size.y;
+                let spacing_y = ui.spacing().item_spacing.y;
+                let row_stride = row_height + spacing_y; // Actual pixel gap per item index
+                let available_height = ui.available_height(); // Height of the left panel
+
+                // --- Mathematically Correct Programmatic Scrolling ---
+                let mut scroll_area = egui::ScrollArea::vertical();
+                if self.scroll_to_selected {
+                    if let Some(selected_idx) = self.selected_node_idx() {
+                        // Find the index of the selected item in the flat visible list
+                        if let Some(row_index) = visible_nodes
+                            .iter()
+                            .position(|&(node_idx, _)| node_idx == selected_idx)
+                        {
+                            #[allow(clippy::cast_precision_loss)]
+                            let target_y = (row_index as f32) * row_stride;
+
+                            // Calculate center offset relative to the available height of the viewport
+                            let center_offset = (available_height - row_height) / 2.0;
+                            let offset = (target_y - center_offset).max(0.0);
+
+                            scroll_area = scroll_area.vertical_scroll_offset(offset);
+                        }
+                    }
+                    self.scroll_to_selected = false; // Reset the scroll trigger
+                }
+
+                scroll_area.show_rows(ui, row_height, visible_nodes.len(), |ui, row_range| {
+                    for idx in row_range {
+                        let (node_idx, indent) = visible_nodes[idx];
+                        self.render_tree_node_row(ui, snapshot, node_idx, indent);
+                    }
+                });
+            }
+        });
+    }
+
+    fn render_welcome_screen(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(80.0);
+            ui.add(
+                egui::Image::new(egui::include_image!(
+                    "../../assets/img/logo-nosubtext-transparent.png"
+                ))
+                .max_height(140.0),
+            );
+            ui.add_space(20.0);
+
+            ui.heading(egui::RichText::new(t!("web-viewer")).strong().size(24.0));
+            ui.add_space(5.0);
+
+            ui.group(|ui| {
+                ui.set_width(320.0);
+                ui.vertical_centered_justified(|ui| {
+                    ui.add_space(5.0);
+                    ui.heading(
+                        egui::RichText::new(t!("choose-an-option"))
+                            .size(15.0)
+                            .strong(),
+                    );
+                    ui.add_space(10.0);
+
+                    #[cfg(not(target_family = "wasm"))]
+                    {
+                        if ui.button(t!("new-scan")).clicked() {
+                            self.active_modal = Some(ActiveModal::ScanOptions);
+                        }
+                        ui.add_space(10.0);
+                        if ui.button(t!("load-snapshot")).clicked() {
+                            let file_opt = rfd::FileDialog::new()
+                                .add_filter(
+                                    "weshtatistic Snapshot (*.edst.zst, *.edst)",
+                                    &["edst.zst", "edst", "zst"],
+                                )
+                                .add_filter("All Files (*)", &["*"])
+                                .pick_file();
+                            if let Some(path) = file_opt
+                                && let Err(e) = self.load_snapshot_file(path)
+                            {
+                                crate::gui::toast_error(format!("Failed to load snapshot: {e}"));
+                            }
+                        }
+                    }
+
+                    #[cfg(target_family = "wasm")]
+                    {
+                        if ui.button(t!("load-snapshot")).clicked() {
+                            let command_tx = self.command_tx.clone();
+                            wasm_bindgen_futures::spawn_local(async move {
+                                if let Some(handle) = rfd::AsyncFileDialog::new()
+                                    .add_filter(
+                                        "weshtatistic Snapshot (*.edst.zst, *.edst)",
+                                        &["edst.zst", "edst", "zst"],
+                                    )
+                                    .add_filter("All Files (*)", &["*"])
+                                    .pick_file()
+                                    .await
+                                {
+                                    let bytes = handle.read().await;
+                                    let _ = command_tx.send(
+                                        crate::gui::operations::AppCommand::LoadSnapshotBytes {
+                                            name: handle.file_name(),
+                                            bytes,
+                                        },
+                                    );
+                                }
+                            });
+                        }
+                        ui.add_space(10.0);
+                        if ui.button(t!("load-demo")).clicked() {
+                            load_demo_via_js();
+                        }
+                    }
+                });
+            });
+        });
+    }
+
+    fn render_classic_central_panel(&mut self, ui: &mut egui::Ui, snapshot: &FileArenaSnapshot) {
+        ui.vertical(|ui| {
+            self.draw_central_panel_header(ui, snapshot);
+            ui.separator();
+
+            match self.vis_mode {
+                VisMode::Treemap => {
+                    if snapshot.nodes.is_empty() {
+                        ui.centered_and_justified(|ui| {
+                            ui.label(t!("placeholder-treemap"));
+                        });
+                    } else {
+                        // Gather temporary HashSets compatible with the treemap API
+                        let mut selected_nodes_set: HashSet<u32> =
+                            self.table_state.selected_rows.iter().collect();
+                        let mut expanded_nodes_set: HashSet<u32> =
+                            self.table_state.expanded_rows.iter().collect();
+
+                        let mut context = stats::StatContext {
+                            selected_nodes: &mut selected_nodes_set,
+                            expanded_nodes: &mut expanded_nodes_set,
+                            scroll_to_selected: &mut self.scroll_to_selected,
+                            deduplicator_results: Some(&self.deduplicator_results),
+                        };
+                        self.treemap_chart.draw_borders = self.treemap_borders;
+                        self.treemap_chart.style = self.treemap_style;
+                        self.treemap_chart.render(ui, snapshot, &mut context);
+
+                        if self.treemap_chart.zoom_root != 0
+                            && (self.treemap_chart.zoom_root as usize) < snapshot.nodes.len()
+                        {
+                            self.zoom_path =
+                                Some(snapshot.get_full_path(self.treemap_chart.zoom_root));
+                        } else {
+                            self.zoom_path = None;
+                        }
+
+                        // Content-Aware Sync (Selections)
+                        let selection_changed = selected_nodes_set.len()
+                            != self.table_state.selected_rows.len() as usize
+                            || selected_nodes_set
+                                .iter()
+                                .any(|&idx| !self.table_state.selected_rows.contains(idx));
+
+                        if selection_changed {
+                            self.table_state.selected_rows.clear();
+                            self.table_state
+                                .selected_rows
+                                .extend(selected_nodes_set.iter());
+                        }
+
+                        // Content-Aware Sync (Expansions)
+                        let expansion_changed = expanded_nodes_set.len()
+                            != self.table_state.expanded_rows.len() as usize
+                            || expanded_nodes_set
+                                .iter()
+                                .any(|&idx| !self.table_state.expanded_rows.contains(idx));
+
+                        if expansion_changed {
+                            self.table_state.expanded_rows.clear();
+                            self.table_state
+                                .expanded_rows
+                                .extend(expanded_nodes_set.iter());
+                        }
+                    }
+                }
+                VisMode::Plots => {
+                    ui.add_space(8.0);
+                    if snapshot.nodes.is_empty() {
+                        ui.centered_and_justified(|ui| {
+                            ui.label(t!("placeholder-plots"));
+                        });
+                    } else {
+                        let mut selected_nodes_set: HashSet<u32> =
+                            self.table_state.selected_rows.iter().collect();
+                        let mut expanded_nodes_set: HashSet<u32> =
+                            self.table_state.expanded_rows.iter().collect();
+
+                        let mut context = stats::StatContext {
+                            selected_nodes: &mut selected_nodes_set,
+                            expanded_nodes: &mut expanded_nodes_set,
+                            scroll_to_selected: &mut self.scroll_to_selected,
+                            deduplicator_results: Some(&self.deduplicator_results),
+                        };
+                        match self.plot_type {
+                            PlotType::SizeDistribution => {
+                                self.size_dist_chart.render(ui, snapshot, &mut context);
+                            }
+                            PlotType::AgeSizeScatter => {
+                                self.scatter_chart.render(ui, snapshot, &mut context);
+                            }
+                            PlotType::DirComposition => {
+                                self.dir_comp_chart.render(ui, snapshot, &mut context);
+                            }
+                            PlotType::ExtensionBoxplot => {
+                                self.boxplot_chart.render(ui, snapshot, &mut context);
+                            }
+                            PlotType::TemporalTimeline => {
+                                self.timeline_chart.render(ui, snapshot, &mut context);
+                            }
+                            PlotType::DeduplicatorWaste => {
+                                self.duplicate_waste_chart
+                                    .render(ui, snapshot, &mut context);
+                            }
+                        }
+
+                        // Content-Aware Sync (Selections)
+                        let selection_changed = selected_nodes_set.len()
+                            != self.table_state.selected_rows.len() as usize
+                            || selected_nodes_set
+                                .iter()
+                                .any(|&idx| !self.table_state.selected_rows.contains(idx));
+
+                        if selection_changed {
+                            self.table_state.selected_rows.clear();
+                            self.table_state
+                                .selected_rows
+                                .extend(selected_nodes_set.iter());
+                        }
+
+                        // Content-Aware Sync (Expansions)
+                        let expansion_changed = expanded_nodes_set.len()
+                            != self.table_state.expanded_rows.len() as usize
+                            || expanded_nodes_set
+                                .iter()
+                                .any(|&idx| !self.table_state.expanded_rows.contains(idx));
+
+                        if expansion_changed {
+                            self.table_state.expanded_rows.clear();
+                            self.table_state
+                                .expanded_rows
+                                .extend(expanded_nodes_set.iter());
+                        }
+                    }
+                }
+                VisMode::Deduplicator => {
+                    self.render_deduplicator_tab(ui, snapshot);
+                }
+                VisMode::Docker => {
+                    self.render_docker_tab(ui, snapshot);
+                }
+                VisMode::Cleanup => {
+                    self.render_cleanup_tab(ui, snapshot);
+                }
+            }
+        });
+    }
+
+    fn render_windirstat_layout(&mut self, ui: &mut egui::Ui, snapshot: &FileArenaSnapshot) {
+        let default_top_height = (ui.available_height() * 0.5).clamp(180.0, 1200.0);
+
+        // We want a top panel and a bottom panel (Central Panel space).
+        let top_panel = egui::Panel::top("windirstat_top_panel")
+            .resizable(true)
+            .default_size(default_top_height)
+            .size_range(150.0..=1200.0);
+        top_panel.show(ui, |ui| {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                // Render operations directly as a flat row of toolbar buttons
+                ui.spacing_mut().item_spacing.x = 8.0;
+
+                self.draw_custom_operations_toolbar(ui, snapshot);
+
+                // Separator between operations and the search/filter box
+                ui.separator();
+
+                // Filter search input
+                ui.label(t!("search-filter-label"));
+                if !self.search_query.is_empty() && ui.button("❌").clicked() {
+                    self.search_query.clear();
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let reg = self.filter_regex;
+                    let reg_btn = ui
+                        .selectable_label(reg, egui::RichText::new(".*").strong())
+                        .on_hover_text(t!("search-use-regex"));
+                    if reg_btn.clicked() {
+                        self.filter_regex = !reg;
+                    }
+
+                    let case_sens = self.filter_case_sensitive;
+                    let case_btn = ui
+                        .selectable_label(case_sens, egui::RichText::new("Aa").strong())
+                        .on_hover_text(t!("search-match-case"));
+                    if case_btn.clicked() {
+                        self.filter_case_sensitive = !case_sens;
+                    }
+
+                    let text_width = ui.available_width() - 8.0;
+                    let sc_search =
+                        shortcuts::format_shortcut(ui.ctx(), &shortcuts::SHORTCUT_SEARCH);
+                    let resp = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.search_query)
+                                .id_salt("windirstat_filter_text_edit")
+                                .hint_text(format!("Filter ({sc_search})…"))
+                                .desired_width(text_width.max(50.0)),
+                        )
+                        .on_hover_text(format!("{} ({sc_search})", t!("search-filter-label")));
+                    if self.focus_search {
+                        resp.request_focus();
+                        self.focus_search = false;
+                    }
+                });
+            });
+            ui.separator();
+
+            // If selection exists, pop out detail panel on the right of the top section
+            if !self.table_state.selected_rows.is_empty() {
+                egui::Panel::right("windirstat_detail_panel")
+                    .resizable(true)
+                    .default_size(260.0)
+                    .size_range(160.0..=450.0)
+                    .show(ui, |ui| {
+                        if self.table_state.selected_rows.len() == 1 {
+                            if let Some(selected_idx) = self.table_state.selected_rows.iter().next()
+                            {
+                                self.render_file_detail_list(ui, snapshot, selected_idx);
+                            }
+                        } else {
+                            self.render_multi_file_detail_list(ui, snapshot);
+                        }
+                    });
+            }
+
+            // The rest is the table view
+            let mut frame = egui::Frame::central_panel(ui.style());
+            frame.inner_margin.top = 2; // Shrink top padding above the table
+            egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+                self.render_hierarchical_table(ui, snapshot);
+            });
+        });
+
+        // The remaining area becomes the bottom section
+        egui::CentralPanel::default().show(ui, |ui| {
+            ui.vertical(|ui| {
+                self.draw_central_panel_header(ui, snapshot);
+                ui.separator();
+
+                // Right Extensions Panel inside the bottom section if not collapsed
+                if !self.right_panel_collapsed
+                    && self.vis_mode != VisMode::Deduplicator
+                    && self.vis_mode != VisMode::Docker
+                    && self.vis_mode != VisMode::Cleanup
+                {
+                    egui::Panel::right("windirstat_extensions_panel")
+                        .resizable(true)
+                        .default_size(210.0)
+                        .size_range(80.0..=250.0)
+                        .show(ui, |ui| {
+                            self.draw_extensions_contents(ui);
+                        });
+                }
+
+                // Rest of the space for visualizers (rendered directly without nested CentralPanel to avoid vertical spacing gaps)
+                match self.vis_mode {
+                    VisMode::Treemap => {
+                        if snapshot.nodes.is_empty() {
+                            ui.centered_and_justified(|ui| {
+                                ui.label(t!("placeholder-treemap"));
+                            });
+                        } else {
+                            // Gather temporary HashSets compatible with the treemap API
+                            let mut selected_nodes_set: HashSet<u32> =
+                                self.table_state.selected_rows.iter().collect();
+                            let mut expanded_nodes_set: HashSet<u32> =
+                                self.table_state.expanded_rows.iter().collect();
+
+                            let mut context = stats::StatContext {
+                                selected_nodes: &mut selected_nodes_set,
+                                expanded_nodes: &mut expanded_nodes_set,
+                                scroll_to_selected: &mut self.scroll_to_selected,
+                                deduplicator_results: Some(&self.deduplicator_results),
+                            };
+                            self.treemap_chart.draw_borders = self.treemap_borders;
+                            self.treemap_chart.style = self.treemap_style;
+                            self.treemap_chart.render(ui, snapshot, &mut context);
+
+                            if self.treemap_chart.zoom_root != 0
+                                && (self.treemap_chart.zoom_root as usize) < snapshot.nodes.len()
+                            {
+                                self.zoom_path =
+                                    Some(snapshot.get_full_path(self.treemap_chart.zoom_root));
+                            } else {
+                                self.zoom_path = None;
+                            }
+
+                            // Content-Aware Sync (Selections)
+                            let selection_changed = selected_nodes_set.len()
+                                != self.table_state.selected_rows.len() as usize
+                                || selected_nodes_set
+                                    .iter()
+                                    .any(|&idx| !self.table_state.selected_rows.contains(idx));
+
+                            if selection_changed {
+                                self.table_state.selected_rows.clear();
+                                self.table_state
+                                    .selected_rows
+                                    .extend(selected_nodes_set.iter());
+                            }
+
+                            // Content-Aware Sync (Expansions)
+                            let expansion_changed = expanded_nodes_set.len()
+                                != self.table_state.expanded_rows.len() as usize
+                                || expanded_nodes_set
+                                    .iter()
+                                    .any(|&idx| !self.table_state.expanded_rows.contains(idx));
+
+                            if expansion_changed {
+                                self.table_state.expanded_rows.clear();
+                                self.table_state
+                                    .expanded_rows
+                                    .extend(expanded_nodes_set.iter());
+                            }
+                        }
+                    }
+                    VisMode::Plots => {
+                        egui::Frame::new()
+                            .inner_margin(egui::Margin {
+                                left: 6,
+                                right: 6,
+                                top: 6,
+                                bottom: 0,
+                            })
+                            .show(ui, |ui| {
+                                if snapshot.nodes.is_empty() {
+                                    ui.centered_and_justified(|ui| {
+                                        ui.label(t!("placeholder-plots"));
+                                    });
+                                } else {
+                                    let mut selected_nodes_set: HashSet<u32> =
+                                        self.table_state.selected_rows.iter().collect();
+                                    let mut expanded_nodes_set: HashSet<u32> =
+                                        self.table_state.expanded_rows.iter().collect();
+
+                                    let mut context = stats::StatContext {
+                                        selected_nodes: &mut selected_nodes_set,
+                                        expanded_nodes: &mut expanded_nodes_set,
+                                        scroll_to_selected: &mut self.scroll_to_selected,
+                                        deduplicator_results: Some(&self.deduplicator_results),
+                                    };
+                                    match self.plot_type {
+                                        PlotType::SizeDistribution => {
+                                            self.size_dist_chart.render(ui, snapshot, &mut context);
+                                        }
+                                        PlotType::AgeSizeScatter => {
+                                            self.scatter_chart.render(ui, snapshot, &mut context);
+                                        }
+                                        PlotType::DirComposition => {
+                                            self.dir_comp_chart.render(ui, snapshot, &mut context);
+                                        }
+                                        PlotType::ExtensionBoxplot => {
+                                            self.boxplot_chart.render(ui, snapshot, &mut context);
+                                        }
+                                        PlotType::TemporalTimeline => {
+                                            self.timeline_chart.render(ui, snapshot, &mut context);
+                                        }
+                                        PlotType::DeduplicatorWaste => {
+                                            self.duplicate_waste_chart.render(
+                                                ui,
+                                                snapshot,
+                                                &mut context,
+                                            );
+                                        }
+                                    }
+
+                                    // Content-Aware Sync (Selections)
+                                    let selection_changed = selected_nodes_set.len()
+                                        != self.table_state.selected_rows.len() as usize
+                                        || selected_nodes_set.iter().any(|&idx| {
+                                            !self.table_state.selected_rows.contains(idx)
+                                        });
+
+                                    if selection_changed {
+                                        self.table_state.selected_rows.clear();
+                                        self.table_state
+                                            .selected_rows
+                                            .extend(selected_nodes_set.iter());
+                                    }
+
+                                    // Content-Aware Sync (Expansions)
+                                    let expansion_changed = expanded_nodes_set.len()
+                                        != self.table_state.expanded_rows.len() as usize
+                                        || expanded_nodes_set.iter().any(|&idx| {
+                                            !self.table_state.expanded_rows.contains(idx)
+                                        });
+
+                                    if expansion_changed {
+                                        self.table_state.expanded_rows.clear();
+                                        self.table_state
+                                            .expanded_rows
+                                            .extend(expanded_nodes_set.iter());
+                                    }
+                                }
+                            });
+                    }
+                    VisMode::Deduplicator => {
+                        self.render_deduplicator_tab(ui, snapshot);
+                    }
+                    VisMode::Docker => {
+                        self.render_docker_tab(ui, snapshot);
+                    }
+                    VisMode::Cleanup => {
+                        self.render_cleanup_tab(ui, snapshot);
+                    }
+                }
+            });
+        });
+    }
+
+    pub(crate) fn draw_custom_operations_toolbar(
+        &mut self,
+        ui: &mut egui::Ui,
+        snapshot: &FileArenaSnapshot,
+    ) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let provider =
+                crate::gui::explorer::TableProviderWrapper::new(snapshot, self.time_format.clone());
+
+            let _ = self.operations.gui_custom(
+                ui,
+                &provider,
+                &mut self.table_state,
+                false,
+                |ui, op, enabled, reason, _| {
+                    render_custom_op_button(ui, op.icon(), op.name().as_ref(), enabled, reason)
+                },
+            );
+        });
+    }
+}
+
+fn get_op_hover_color(op_name: &str) -> egui::Color32 {
+    match op_name {
+        "Up One Level" => egui::Color32::from_rgb(59, 130, 246), // Blue
+        "Refresh Entire Scan" => egui::Color32::from_rgb(16, 185, 129), // Emerald Green
+        "Refresh Directory" => egui::Color32::from_rgb(34, 197, 94), // Green
+        "Open in File Manager" => egui::Color32::from_rgb(245, 158, 11), // Orange/Amber
+        "Open Terminal Here" => egui::Color32::from_rgb(6, 182, 212), // Cyan/Teal
+        "Copy Path" | "Copy Name" => egui::Color32::from_rgb(139, 92, 246), // Purple
+        "Move to Trash" => egui::Color32::from_rgb(234, 179, 8), // Yellow/Orange
+        "Permanently Delete" => egui::Color32::from_rgb(239, 68, 68), // Red
+        _ => egui::Color32::from_rgb(96, 165, 250),              // Default light blue
+    }
+}
+
+fn render_custom_op_button(
+    ui: &mut egui::Ui,
+    icon: &str,
+    name: &str,
+    enabled: bool,
+    reason: &str,
+) -> egui::Response {
+    render_custom_op_button_scaled(ui, icon, name, enabled, reason, 1.0)
+}
+
+/// [`render_custom_op_button`] at a fraction of its default size: both the
+/// icon glyph and the button frame/padding scale together, so the rendered
+/// height shrinks proportionally (the default toolbar-sized button is ~26px
+/// tall, which overflows compact table rows). Used by the cleanup tab's
+/// per-row action cells; `scale = 1.0` reproduces the toolbar rendering
+/// exactly.
+fn render_custom_op_button_scaled(
+    ui: &mut egui::Ui,
+    icon: &str,
+    name: &str,
+    enabled: bool,
+    reason: &str,
+    scale: f32,
+) -> egui::Response {
+    let hover_color = get_op_hover_color(name);
+
+    ui.add_enabled_ui(enabled, |ui| {
+        let mut response = ui
+            .scope(|ui| {
+                ui.style_mut().visuals.button_frame = true;
+
+                let active_theme = theme::get_current_theme();
+                if active_theme == theme::AppTheme::HighContrast {
+                    // Inactive (black background, strong colored borders & icon)
+                    ui.style_mut().visuals.widgets.inactive.weak_bg_fill =
+                        egui::Color32::from_rgb(0, 0, 0);
+                    ui.style_mut().visuals.widgets.inactive.bg_stroke =
+                        egui::Stroke::new(2.0, hover_color);
+                    ui.style_mut().visuals.widgets.inactive.fg_stroke =
+                        egui::Stroke::new(1.5, hover_color);
+
+                    // Hovered (dark gray background, yellow border/icon)
+                    ui.style_mut().visuals.widgets.hovered.weak_bg_fill =
+                        egui::Color32::from_rgb(40, 40, 40);
+                    ui.style_mut().visuals.widgets.hovered.bg_stroke =
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 255, 0));
+                    ui.style_mut().visuals.widgets.hovered.fg_stroke =
+                        egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 255, 0));
+
+                    // Active (cyan background, white text/border)
+                    ui.style_mut().visuals.widgets.active.weak_bg_fill =
+                        egui::Color32::from_rgb(0, 0, 180);
+                    ui.style_mut().visuals.widgets.active.bg_stroke =
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(235, 235, 235));
+                    ui.style_mut().visuals.widgets.active.fg_stroke =
+                        egui::Stroke::new(1.5, egui::Color32::from_rgb(235, 235, 235));
+                } else if active_theme == theme::AppTheme::Light {
+                    // Inactive (white background, strong colored icon)
+                    ui.style_mut().visuals.widgets.inactive.weak_bg_fill =
+                        egui::Color32::from_rgb(255, 255, 255);
+                    ui.style_mut().visuals.widgets.inactive.bg_stroke =
+                        egui::Stroke::new(1.0, hover_color.linear_multiply(0.4));
+                    ui.style_mut().visuals.widgets.inactive.fg_stroke =
+                        egui::Stroke::new(1.2, hover_color);
+
+                    // Hovered (soft gray background, strong colored icon/border)
+                    ui.style_mut().visuals.widgets.hovered.weak_bg_fill =
+                        egui::Color32::from_rgb(230, 230, 235);
+                    ui.style_mut().visuals.widgets.hovered.bg_stroke =
+                        egui::Stroke::new(1.0, hover_color);
+                    ui.style_mut().visuals.widgets.hovered.fg_stroke =
+                        egui::Stroke::new(1.2, hover_color);
+
+                    // Active (pressed)
+                    ui.style_mut().visuals.widgets.active.weak_bg_fill =
+                        egui::Color32::from_rgb(209, 209, 214);
+                    ui.style_mut().visuals.widgets.active.bg_stroke =
+                        egui::Stroke::new(1.0, hover_color);
+                    ui.style_mut().visuals.widgets.active.fg_stroke =
+                        egui::Stroke::new(1.2, hover_color);
+                } else {
+                    // Dark theme (original subtle styling)
+                    ui.style_mut().visuals.widgets.inactive.weak_bg_fill =
+                        hover_color.linear_multiply(0.04);
+                    ui.style_mut().visuals.widgets.inactive.bg_stroke =
+                        egui::Stroke::new(1.0f32, hover_color.linear_multiply(0.12));
+                    ui.style_mut().visuals.widgets.inactive.fg_stroke =
+                        egui::Stroke::new(1.0f32, ui.visuals().widgets.inactive.text_color());
+
+                    // Hovered (soft fill, subtle stroke, full hover color for icon)
+                    ui.style_mut().visuals.widgets.hovered.weak_bg_fill =
+                        hover_color.linear_multiply(0.12);
+                    ui.style_mut().visuals.widgets.hovered.bg_stroke =
+                        egui::Stroke::new(1.0f32, hover_color.linear_multiply(0.4));
+                    ui.style_mut().visuals.widgets.hovered.fg_stroke =
+                        egui::Stroke::new(1.0f32, hover_color);
+
+                    // Active (pressed)
+                    ui.style_mut().visuals.widgets.active.weak_bg_fill =
+                        hover_color.linear_multiply(0.24);
+                    ui.style_mut().visuals.widgets.active.bg_stroke =
+                        egui::Stroke::new(1.0f32, hover_color.linear_multiply(0.6));
+                    ui.style_mut().visuals.widgets.active.fg_stroke =
+                        egui::Stroke::new(1.0f32, hover_color);
+                }
+
+                // Set button padding to make it a nice square
+                ui.spacing_mut().button_padding = egui::vec2(6.0, 4.0) * scale;
+
+                ui.button(egui::RichText::new(icon).size(15.0 * scale))
+            })
+            .inner;
+
+        if enabled {
+            response = response.on_hover_text(name);
+        } else {
+            response = response.on_disabled_hover_text(format!("{name}\n({reason})"));
+        }
+
+        response
+    })
+    .inner
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn open_terminal_at(path: &Path) -> std::io::Result<()> {
+    if crate::gui::operations::is_terminal_disabled() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Terminal execution is disabled in sandboxed environment",
+        ));
+    }
+    let dir = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    };
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "cmd"])
+            .current_dir(dir)
+            .spawn()?;
+        Ok(())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if crate::gui::operations::IS_MACOS_APPSTORE {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Terminal execution is disabled in Mac App Store builds",
+            ));
+        }
+        std::process::Command::new("open")
+            .arg("-a")
+            .arg("Terminal")
+            .arg(dir)
+            .spawn()?;
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let emulators = [
+            "x-terminal-emulator",
+            "gnome-terminal",
+            "konsole",
+            "xfce4-terminal",
+            "kitty",
+            "alacritty",
+            "xterm",
+        ];
+        let mut last_err = None;
+        for &emulator in &emulators {
+            let mut cmd = std::process::Command::new(emulator);
+            if emulator == "gnome-terminal" {
+                cmd.arg(format!("--working-directory={}", dir.display()));
+            } else {
+                cmd.current_dir(dir);
+            }
+            match cmd.spawn() {
+                Ok(_) => return Ok(()),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        last_err.map_or_else(
+            || {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "No terminal emulator found",
+                ))
+            },
+            Err,
+        )
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Unsupported platform",
+        ))
+    }
+}
+
+#[cfg(target_family = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = "
+    export function load_demo_via_js() {
+        window.location.search = '?demo=true';
+    }
+")]
+extern "C" {
+    pub fn load_demo_via_js();
+}
+
+#[cfg(target_family = "wasm")]
+static GLOBAL_COMMAND_TX: parking_lot::Mutex<
+    Option<std::sync::mpsc::Sender<crate::gui::operations::AppCommand>>,
+> = parking_lot::Mutex::new(None);
+
+#[cfg(target_family = "wasm")]
+static PENDING_SNAPSHOT: parking_lot::Mutex<Option<(String, Vec<u8>)>> =
+    parking_lot::Mutex::new(None);
+
+#[cfg(target_family = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn load_snapshot_from_js(bytes: &[u8], display_name: &str) {
+    if let Some(tx) = &*GLOBAL_COMMAND_TX.lock() {
+        let _ = tx.send(crate::gui::operations::AppCommand::LoadSnapshotBytes {
+            name: display_name.to_string(),
+            bytes: bytes.to_vec(),
+        });
+    } else {
+        *PENDING_SNAPSHOT.lock() = Some((display_name.to_string(), bytes.to_vec()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cleanup tab's per-row action cells render the trash/delete op
+    /// buttons at 0.7x because the default toolbar size (measured ~25px tall
+    /// with the app font stack) overflows the table's 28px rows. This guards
+    /// the contract: the scaled button must fit a row with a visible margin,
+    /// while scale 1.0 stays toolbar-sized.
+    #[test]
+    fn op_button_scaled_fits_cleanup_table_row() {
+        let ctx = egui::Context::default();
+        crate::gui::fonts::install_fonts(&ctx);
+
+        let mut heights = [0.0_f32; 2];
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            heights[0] = render_custom_op_button_scaled(ui, "♻", "Move to Trash", true, "", 1.0)
+                .rect
+                .height();
+            heights[1] = render_custom_op_button_scaled(ui, "♻", "Move to Trash", true, "", 0.7)
+                .rect
+                .height();
+        });
+        output.textures_delta.clear(); // no renderer here to apply them
+
+        let [default_h, scaled_h] = heights;
+        assert!(
+            default_h > 20.0,
+            "default toolbar button regressed: {default_h}"
+        );
+        assert!(
+            scaled_h <= 24.0,
+            "scaled op button ({scaled_h}px) must fit the 28px cleanup row with a margin"
+        );
+    }
+
+    #[test]
+    fn test_locale_from_bcp47_matching() {
+        assert_eq!(Locale::from_bcp47("tr-TR"), Some(Locale::TrTr));
+        assert_eq!(Locale::from_bcp47("tr_TR.UTF-8"), Some(Locale::TrTr));
+        assert_eq!(Locale::from_bcp47("tr"), Some(Locale::TrTr));
+        assert_eq!(Locale::from_bcp47("de-DE"), Some(Locale::DeDe));
+        assert_eq!(Locale::from_bcp47("de_AT@euro"), Some(Locale::DeDe));
+        assert_eq!(Locale::from_bcp47("es-ES"), Some(Locale::EsEs));
+        assert_eq!(Locale::from_bcp47("es_MX.UTF-8"), Some(Locale::EsEs));
+        assert_eq!(Locale::from_bcp47("fr-FR"), Some(Locale::FrFr));
+        assert_eq!(Locale::from_bcp47("fr_CA"), Some(Locale::FrFr));
+        assert_eq!(Locale::from_bcp47("it-IT"), Some(Locale::ItIt));
+        assert_eq!(Locale::from_bcp47("it_CH"), Some(Locale::ItIt));
+        assert_eq!(Locale::from_bcp47("nl-NL"), Some(Locale::NlNl));
+        assert_eq!(Locale::from_bcp47("nl_BE"), Some(Locale::NlNl));
+        assert_eq!(Locale::from_bcp47("pl-PL"), Some(Locale::PlPl));
+        assert_eq!(Locale::from_bcp47("pl"), Some(Locale::PlPl));
+        assert_eq!(Locale::from_bcp47("pt-PT"), Some(Locale::PtPt));
+        assert_eq!(Locale::from_bcp47("pt-BR"), Some(Locale::PtPt));
+        assert_eq!(Locale::from_bcp47("ru-RU"), Some(Locale::RuRu));
+        assert_eq!(Locale::from_bcp47("ru_RU.UTF-8"), Some(Locale::RuRu));
+        assert_eq!(Locale::from_bcp47("ru"), Some(Locale::RuRu));
+        assert_eq!(Locale::from_bcp47("en-US"), Some(Locale::EnUs));
+        assert_eq!(Locale::from_bcp47("en-GB"), Some(Locale::EnUs));
+        assert_eq!(Locale::from_bcp47("en"), Some(Locale::EnUs));
+        assert_eq!(Locale::from_bcp47("ja-JP"), Some(Locale::JaJp));
+        assert_eq!(Locale::from_bcp47("ja_JP.UTF-8"), Some(Locale::JaJp));
+        assert_eq!(Locale::from_bcp47("ja"), Some(Locale::JaJp));
+        assert_eq!(Locale::from_bcp47("ko-KR"), Some(Locale::KoKr));
+        assert_eq!(Locale::from_bcp47("ko"), Some(Locale::KoKr));
+        assert_eq!(Locale::from_bcp47("zh-CN"), Some(Locale::ZhCn));
+        assert_eq!(Locale::from_bcp47("zh-HK"), Some(Locale::ZhHk));
+        assert_eq!(Locale::from_bcp47("zh_HK.UTF-8"), Some(Locale::ZhHk));
+        assert_eq!(Locale::from_bcp47("zh-Hans-CN"), Some(Locale::ZhCn));
+        assert_eq!(Locale::from_bcp47("zh-Hant-HK"), Some(Locale::ZhHk));
+        assert_eq!(Locale::from_bcp47("zh-Hant"), Some(Locale::ZhHk));
+        assert_eq!(Locale::from_bcp47("zh-TW"), Some(Locale::ZhHk));
+        assert_eq!(Locale::from_bcp47("zh-SG"), Some(Locale::ZhCn));
+        assert_eq!(Locale::from_bcp47("ar-SA"), Some(Locale::ArSa));
+        assert_eq!(Locale::from_bcp47("ar_EG.UTF-8"), Some(Locale::ArSa));
+        assert_eq!(Locale::from_bcp47("ar"), Some(Locale::ArSa));
+        assert_eq!(Locale::from_bcp47("bn-BD"), Some(Locale::BnBd));
+        assert_eq!(Locale::from_bcp47("bn_IN"), Some(Locale::BnBd));
+        assert_eq!(Locale::from_bcp47("hi-IN"), Some(Locale::HiIn));
+        assert_eq!(Locale::from_bcp47("hi"), Some(Locale::HiIn));
+        assert_eq!(Locale::from_bcp47("vi-VN"), Some(Locale::ViVn));
+        assert_eq!(Locale::from_bcp47("vi_VN.UTF-8"), Some(Locale::ViVn));
+
+        // Unsupported / invalid
+        assert_eq!(Locale::from_bcp47("fa-IR"), None);
+        assert_eq!(Locale::from_bcp47(""), None);
+    }
+
+    #[test]
+    fn test_default_snapshot_filename() {
+        assert_eq!(
+            GuiApp::default_snapshot_filename(Some(Path::new("/home/user/projects"))),
+            "projects.edst.zst"
+        );
+        assert_eq!(
+            GuiApp::default_snapshot_filename(Some(Path::new("/home/user/scan.edst.zst"))),
+            "scan.edst.zst"
+        );
+        assert_eq!(
+            GuiApp::default_snapshot_filename(Some(Path::new("/home/user/scan.edst"))),
+            "scan.edst.zst"
+        );
+        assert_eq!(
+            GuiApp::default_snapshot_filename(Some(Path::new("/"))),
+            "snapshot.edst.zst"
+        );
+        assert_eq!(GuiApp::default_snapshot_filename(None), "snapshot.edst.zst");
+    }
+
+    #[test]
+    fn test_resolve_snapshot_save_path() {
+        // Raw filename without extension -> compressed .edst.zst
+        let (path, compress) = GuiApp::resolve_snapshot_save_path(Path::new("/tmp/my_scan"));
+        assert_eq!(path, PathBuf::from("/tmp/my_scan.edst.zst"));
+        assert!(compress);
+
+        // Full .edst.zst extension preserved
+        let (path, compress) =
+            GuiApp::resolve_snapshot_save_path(Path::new("/tmp/my_scan.edst.zst"));
+        assert_eq!(path, PathBuf::from("/tmp/my_scan.edst.zst"));
+        assert!(compress);
+
+        // Explicit .edst extension -> uncompressed
+        let (path, compress) = GuiApp::resolve_snapshot_save_path(Path::new("/tmp/my_scan.edst"));
+        assert_eq!(path, PathBuf::from("/tmp/my_scan.edst"));
+        assert!(!compress);
+
+        // Lone .zst extension normalized to .edst.zst
+        let (path, compress) = GuiApp::resolve_snapshot_save_path(Path::new("/tmp/my_scan.zst"));
+        assert_eq!(path, PathBuf::from("/tmp/my_scan.edst.zst"));
+        assert!(compress);
+
+        // Generic extension appended with .edst.zst
+        let (path, compress) = GuiApp::resolve_snapshot_save_path(Path::new("/tmp/backup.2024"));
+        assert_eq!(path, PathBuf::from("/tmp/backup.2024.edst.zst"));
+        assert!(compress);
+
+        // Case insensitivity
+        let (path, compress) = GuiApp::resolve_snapshot_save_path(Path::new("/tmp/SCAN.EDST"));
+        assert_eq!(path, PathBuf::from("/tmp/SCAN.EDST"));
+        assert!(!compress);
+
+        let (path, compress) = GuiApp::resolve_snapshot_save_path(Path::new("/tmp/SCAN.EDST.ZST"));
+        assert_eq!(path, PathBuf::from("/tmp/SCAN.EDST.ZST"));
+        assert!(compress);
+    }
+}

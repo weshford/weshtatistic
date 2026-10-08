@@ -18,14 +18,12 @@ Unlike traditional analyzers that crawl sequentially, **eDirStat** is engineered
 
 ## 📦 Distribution Model & Project Support
 
-eDirStat is, and will always remain, entirely open-source and free. However, if you'd like to support continuous development, engineering, and maintenance costs, **official pre-compiled binaries for Windows, macOS, and Linux are distributed exclusively as a paid download via [Itch.io - xangelix.itch.io/edirstat](https://xangelix.itch.io/edirstat)**.
+eDirStat is, and will always remain, entirely open-source and free. **Free release binaries for Windows, macOS, and Linux are available as assets on [GitHub Releases](https://github.com/weshford/weshtatistic/releases)**.
 
 - **100% Open Source:** The complete codebase is free of charge and publicly available under the permissive **MIT License**. If you prefer to build the tool yourself, you are welcome to compile the source code on Windows, Linux, or macOS at no cost. Instructions are provided below.
-- **Package Managers:** Package managers and their repository maintainers are welcome to bundle and distribute eDirStat through their respective channels at no cost, provided that it is distributed un-paid, "unofficial", and under the MIT License.
+- **Package Managers:** Package managers and their repository maintainers are welcome to bundle and distribute eDirStat through their respective channels at no cost, provided that it is distributed under the MIT License.
 
-Purchasing precompiled packages directly funds the engineering efforts required to keep eDirStat fast, secure, and compatible with the latest operating systems.
-
-[![Prebuilt Binaries](https://img.shields.io/badge/prebuilt%20binaries-itch.io-ff5c5c)](https://xangelix.itch.io/edirstat)
+[![GitHub Releases](https://img.shields.io/github/v/release/weshford/weshtatistic?label=GitHub%20Release%20binaries)](https://github.com/weshford/weshtatistic/releases)
 [![AUR version](https://img.shields.io/aur/version/edirstat?color=blue)](https://aur.archlinux.org/packages/edirstat)
 
 ---

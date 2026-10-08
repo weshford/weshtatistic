@@ -100,14 +100,14 @@ def main(argv: list[str]) -> int:
         corpus_opt = find_charset_corpus(repo_root)
         if corpus_opt is None:
             print(
-                "error: charset corpus not found in target/. Run `cargo check -p edirstat-gui` first or pass paths explicitly.",
+                "error: charset corpus not found in target/. Run `cargo check -p weshtatistic-gui` first or pass paths explicitly.",
                 file=sys.stderr,
             )
             print(__doc__, file=sys.stderr)
             return 2
         corpus = corpus_opt
-        fonts_dir = repo_root / "crates/edirstat-gui/assets/fonts/raw"
-        out_dir = repo_root / "crates/edirstat-gui/assets/fonts"
+        fonts_dir = repo_root / "crates/weshtatistic-gui/assets/fonts/raw"
+        out_dir = repo_root / "crates/weshtatistic-gui/assets/fonts"
     else:
         print(__doc__, file=sys.stderr)
         return 2

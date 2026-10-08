@@ -1,13 +1,13 @@
 [package]
-name = "edirstat-runner"
+name = "weshtatistic-runner"
 version = "2.2.0"
 edition = "2024"
 publish = false
 
 [package.metadata.winresource]
-ProductName = "edirstat"
+ProductName = "weshtatistic"
 ProductVersion = "2.2.0"
-OriginalFilename = "edirstat.exe"
+OriginalFilename = "weshtatistic.exe"
 FileDescription = "A fast, cross-platform disk usage analyzer with work-stealing multithreading, zero-copy snapshots, deduplication, and an interactive treemap GUI."
 CompanyName = "Cody Wyatt Neiman (xangelix) <neiman@cody.to>"
 LegalCopyright = "Copyright © 2026 Cody Wyatt Neiman (xangelix) <neiman@cody.to>"

@@ -1270,97 +1270,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "edirstat"
-version = "2.2.0"
-dependencies = [
- "ahash",
- "anyhow",
- "bytemuck",
- "clap",
- "cli-or-gui",
- "compact_str",
- "crc-fast",
- "criterion",
- "crossbeam",
- "edirstat-core",
- "edirstat-gui",
- "eframe",
- "mimalloc-rspack",
- "parking_lot",
- "rayon",
- "serde_json",
- "smallvec",
- "sysinfo",
- "tracy-client",
- "windows-sys 0.61.2",
- "winresource",
-]
-
-[[package]]
-name = "edirstat-core"
-version = "2.2.0"
-dependencies = [
- "ahash",
- "arc-swap",
- "bytemuck",
- "chrono",
- "compact_str",
- "getrandom 0.3.4",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "winapi-util",
- "xgx_intern",
- "zstd",
-]
-
-[[package]]
-name = "edirstat-gui"
-version = "2.2.0"
-dependencies = [
- "ahash",
- "anyhow",
- "atomic-progress",
- "blake3",
- "cli-or-gui",
- "compact_str",
- "console_error_panic_hook",
- "directories",
- "edirstat-core",
- "eframe",
- "egui-async",
- "egui-table-kit",
- "egui_extras",
- "egui_plot",
- "fixedbitset",
- "fluent-zero",
- "fluent-zero-build",
- "image",
- "include_packed",
- "log",
- "open",
- "parking_lot",
- "prettier-bytes",
- "rayon",
- "regex",
- "reqwest",
- "rfd",
- "semver",
- "serde",
- "smallvec",
- "strum",
- "sys-locale",
- "sysinfo",
- "toml",
- "tracy-client",
- "trash",
- "uzers",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "eframe"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5462,6 +5371,97 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "weshtatistic"
+version = "2.2.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "bytemuck",
+ "clap",
+ "cli-or-gui",
+ "compact_str",
+ "crc-fast",
+ "criterion",
+ "crossbeam",
+ "eframe",
+ "mimalloc-rspack",
+ "parking_lot",
+ "rayon",
+ "serde_json",
+ "smallvec",
+ "sysinfo",
+ "tracy-client",
+ "weshtatistic-core",
+ "weshtatistic-gui",
+ "windows-sys 0.61.2",
+ "winresource",
+]
+
+[[package]]
+name = "weshtatistic-core"
+version = "2.2.0"
+dependencies = [
+ "ahash",
+ "arc-swap",
+ "bytemuck",
+ "chrono",
+ "compact_str",
+ "getrandom 0.3.4",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "winapi-util",
+ "xgx_intern",
+ "zstd",
+]
+
+[[package]]
+name = "weshtatistic-gui"
+version = "2.2.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "atomic-progress",
+ "blake3",
+ "cli-or-gui",
+ "compact_str",
+ "console_error_panic_hook",
+ "directories",
+ "eframe",
+ "egui-async",
+ "egui-table-kit",
+ "egui_extras",
+ "egui_plot",
+ "fixedbitset",
+ "fluent-zero",
+ "fluent-zero-build",
+ "image",
+ "include_packed",
+ "log",
+ "open",
+ "parking_lot",
+ "prettier-bytes",
+ "rayon",
+ "regex",
+ "reqwest",
+ "rfd",
+ "semver",
+ "serde",
+ "smallvec",
+ "strum",
+ "sys-locale",
+ "sysinfo",
+ "toml",
+ "tracy-client",
+ "trash",
+ "uzers",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "weshtatistic-core",
+]
 
 [[package]]
 name = "wgpu"

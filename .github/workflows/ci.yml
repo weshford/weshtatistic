@@ -93,13 +93,13 @@ jobs:
       - name: Stage Artifact
         run: |
           mkdir -p staging
-          cp target/release/edirstat staging/edirstat-linux-x86_64
+          cp target/release/weshtatistic staging/weshtatistic-linux-x86_64
 
       - name: Upload Asset as Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: edirstat-linux-x86_64
-          path: staging/edirstat-linux-x86_64
+          name: weshtatistic-linux-x86_64
+          path: staging/weshtatistic-linux-x86_64
 
   build-wasm:
     name: Build Web (wasm32)
@@ -136,7 +136,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: wasm-dist
-          path: crates/edirstat-gui/dist
+          path: crates/weshtatistic-gui/dist
 
   build-windows:
     name: Build & Package Windows (Inno Setup)
@@ -162,7 +162,7 @@ jobs:
       - name: Restructure Build Path
         run: |
           mkdir -Force target\release
-          cp -Force target\x86_64-pc-windows-msvc\release\edirstat.exe target\release\edirstat.exe
+          cp -Force target\x86_64-pc-windows-msvc\release\weshtatistic.exe target\release\weshtatistic.exe
 
       - name: Compile Inno Setup Installer
         shell: powershell
@@ -176,19 +176,19 @@ jobs:
 
       - name: Prepare Portable ZIP
         run: |
-          compress-archive -Path target\release\edirstat.exe -DestinationPath staging\edirstat-windows-portable-x86_64.zip
+          compress-archive -Path target\release\weshtatistic.exe -DestinationPath staging\weshtatistic-windows-portable-x86_64.zip
 
       - name: Upload Portable ZIP as Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: edirstat-windows-portable-x86_64.zip
-          path: staging\edirstat-windows-portable-x86_64.zip
+          name: weshtatistic-windows-portable-x86_64.zip
+          path: staging\weshtatistic-windows-portable-x86_64.zip
 
       - name: Upload Installer as Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: edirstat-setup-x86_64.exe
-          path: staging\edirstat-setup-x86_64.exe
+          name: weshtatistic-setup-x86_64.exe
+          path: staging\weshtatistic-setup-x86_64.exe
 
   build-macos:
     name: Build & Package macOS
@@ -219,10 +219,10 @@ jobs:
       - name: Upload Asset as Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: edirstat-macos-${{ matrix.target }}
+          name: weshtatistic-macos-${{ matrix.target }}
           path: |
-            edirstat-macos-*.dmg
-            edirstat-macos-*.zip
+            weshtatistic-macos-*.dmg
+            weshtatistic-macos-*.zip
 
   deploy-web:
     name: Deploy Web (Cloudflare Workers)
@@ -253,7 +253,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: wasm-dist
-          path: crates/edirstat-gui/dist
+          path: crates/weshtatistic-gui/dist
 
       - name: Install Node Dependencies & Build Assets
         run: |

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# package_rpm.sh — Build a Red Hat / Fedora / openSUSE (.rpm) package for eDirStat.
+# package_rpm.sh — Build a Red Hat / Fedora / openSUSE (.rpm) package for weshtatistic.
 #
 # Usage:
 #   ./scripts/package_rpm.sh [options]
 #
 # Options:
-#   --binary <path>     Path to compiled binary (defaults to target/.../edirstat_multivers or target/release/edirstat)
+#   --binary <path>     Path to compiled binary (defaults to target/.../weshtatistic_multivers or target/release/weshtatistic)
 #   --version <ver>     Package version (auto-detected from Cargo.toml if omitted)
 #   --build-num <num>   RPM release number (default: 1)
 #   --arch <arch>       Target architecture (default: x86_64)
@@ -13,7 +13,7 @@
 #   -h, --help          Show this help message
 #
 # Artifacts produced:
-#   <out-dir>/edirstat-<version>-<build-num>.<arch>.rpm
+#   <out-dir>/weshtatistic-<version>-<build-num>.<arch>.rpm
 
 set -euo pipefail
 
@@ -64,9 +64,9 @@ fi
 # ---------- Resolve Binary ----------
 if [[ -z "$BINARY_PATH" ]]; then
   CANDIDATES=(
-    "target/x86_64-unknown-linux-gnu/release/edirstat_multivers"
-    "target/release/edirstat"
-    "target/x86_64-unknown-linux-gnu/release/edirstat"
+    "target/x86_64-unknown-linux-gnu/release/weshtatistic_multivers"
+    "target/release/weshtatistic"
+    "target/x86_64-unknown-linux-gnu/release/weshtatistic"
   )
   for c in "${CANDIDATES[@]}"; do
     if [[ -f "$c" ]]; then
@@ -87,7 +87,7 @@ if ! command -v rpmbuild >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "==> Packaging eDirStat for Red Hat / Fedora / openSUSE (.rpm)"
+echo "==> Packaging weshtatistic for Red Hat / Fedora / openSUSE (.rpm)"
 echo "  • Version:       $VERSION-$BUILD_NUM"
 echo "  • Architecture:  $ARCH"
 echo "  • Source binary: $BINARY_PATH"
@@ -96,10 +96,10 @@ echo "  • Output dir:    $OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 # ---------- Setup Isolated RPM Build Tree ----------
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/edirstat_rpm_build.XXXXXX")"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/weshtatistic_rpm_build.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-BUILDROOT="$TMP_DIR/BUILDROOT/edirstat-${VERSION}-${BUILD_NUM}.${ARCH}"
+BUILDROOT="$TMP_DIR/BUILDROOT/weshtatistic-${VERSION}-${BUILD_NUM}.${ARCH}"
 mkdir -p \
   "$TMP_DIR/BUILD" \
   "$TMP_DIR/RPMS" \
@@ -109,25 +109,25 @@ mkdir -p \
   "$BUILDROOT/usr/bin" \
   "$BUILDROOT/usr/share/applications" \
   "$BUILDROOT/usr/share/icons/hicolor/scalable/apps" \
-  "$BUILDROOT/usr/share/doc/edirstat" \
-  "$BUILDROOT/usr/share/licenses/edirstat"
+  "$BUILDROOT/usr/share/doc/weshtatistic" \
+  "$BUILDROOT/usr/share/licenses/weshtatistic"
 
 # 1. Binary
-install -m 755 "$BINARY_PATH" "$BUILDROOT/usr/bin/edirstat"
+install -m 755 "$BINARY_PATH" "$BUILDROOT/usr/bin/weshtatistic"
 
 # 2. Desktop Entry
-DESKTOP_SRC="assets/linux/edirstat.desktop"
+DESKTOP_SRC="assets/linux/weshtatistic.desktop"
 if [[ -f "$DESKTOP_SRC" ]]; then
-  install -m 644 "$DESKTOP_SRC" "$BUILDROOT/usr/share/applications/edirstat.desktop"
+  install -m 644 "$DESKTOP_SRC" "$BUILDROOT/usr/share/applications/weshtatistic.desktop"
 else
-  cat > "$BUILDROOT/usr/share/applications/edirstat.desktop" <<'EOF'
+  cat > "$BUILDROOT/usr/share/applications/weshtatistic.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=eDirStat
+Name=weshtatistic
 Comment=Fast, interactive graphical disk usage analyzer & deduplication engine
 GenericName=Disk Usage Analyzer
-Exec=edirstat %U
-Icon=edirstat
+Exec=weshtatistic %U
+Icon=weshtatistic
 Terminal=false
 StartupNotify=true
 Categories=System;Filesystem;Utility;
@@ -142,7 +142,7 @@ for size in 16 32 48 64 128 256 512; do
   if [[ -f "$icon_src" ]]; then
     dest_dir="$BUILDROOT/usr/share/icons/hicolor/${size}x${size}/apps"
     mkdir -p "$dest_dir"
-    install -m 644 "$icon_src" "$dest_dir/edirstat.png"
+    install -m 644 "$icon_src" "$dest_dir/weshtatistic.png"
   fi
 done
 
@@ -151,26 +151,26 @@ if [[ ! -f "$SVG_SRC" ]]; then
   SVG_SRC="assets/img/icon.svg"
 fi
 if [[ -f "$SVG_SRC" ]]; then
-  install -m 644 "$SVG_SRC" "$BUILDROOT/usr/share/icons/hicolor/scalable/apps/edirstat.svg"
+  install -m 644 "$SVG_SRC" "$BUILDROOT/usr/share/icons/hicolor/scalable/apps/weshtatistic.svg"
 fi
 
 # 4. Documentation & Licenses
 if [[ -f "LICENSE" ]]; then
-  install -m 644 "LICENSE" "$BUILDROOT/usr/share/licenses/edirstat/LICENSE"
+  install -m 644 "LICENSE" "$BUILDROOT/usr/share/licenses/weshtatistic/LICENSE"
 fi
 if [[ -f "README.md" ]]; then
-  install -m 644 "README.md" "$BUILDROOT/usr/share/doc/edirstat/README.md"
+  install -m 644 "README.md" "$BUILDROOT/usr/share/doc/weshtatistic/README.md"
 fi
 
 # 5. Generate Spec File
-SPEC_FILE="$TMP_DIR/SPECS/edirstat.spec"
+SPEC_FILE="$TMP_DIR/SPECS/weshtatistic.spec"
 cat > "$SPEC_FILE" <<EOF
-Name:           edirstat
+Name:           weshtatistic
 Version:        ${VERSION}
 Release:        ${BUILD_NUM}%{?dist}
 Summary:        Fast, interactive graphical disk usage analyzer & deduplication engine
 License:        MIT
-URL:            https://edirstat.com
+URL:            https://weshtatistic.com
 BuildArch:      ${ARCH}
 
 AutoReqProv:    no
@@ -181,17 +181,17 @@ Recommends:     libwayland-client
 Recommends:     libX11
 
 %description
-eDirStat is a modern disk usage analyzer in Rust (WinDirStat/KDirStat-inspired),
+weshtatistic is a modern disk usage analyzer in Rust (WinDirStat/KDirStat-inspired),
 featuring a work-stealing parallel scanner, zero-copy arena data model,
 zstd-compressed snapshots, an interactive egui treemap GUI, an NTFS \$MFT
 parser, and a 7-stage BLAKE3 deduplication engine.
 
 %files
-/usr/bin/edirstat
-/usr/share/applications/edirstat.desktop
-/usr/share/icons/hicolor/*/apps/edirstat.*
-%doc /usr/share/doc/edirstat/README.md
-%license /usr/share/licenses/edirstat/LICENSE
+/usr/bin/weshtatistic
+/usr/share/applications/weshtatistic.desktop
+/usr/share/icons/hicolor/*/apps/weshtatistic.*
+%doc /usr/share/doc/weshtatistic/README.md
+%license /usr/share/licenses/weshtatistic/LICENSE
 EOF
 
 # ---------- Build RPM Package ----------
@@ -202,7 +202,7 @@ rpmbuild -bb \
   "$SPEC_FILE"
 
 # ---------- Collect Built Artifact ----------
-BUILT_RPM="$(find "$TMP_DIR/RPMS" -type f -name "edirstat-*.rpm" | head -1 || true)"
+BUILT_RPM="$(find "$TMP_DIR/RPMS" -type f -name "weshtatistic-*.rpm" | head -1 || true)"
 
 if [[ -z "$BUILT_RPM" || ! -f "$BUILT_RPM" ]]; then
   echo "ERROR: rpmbuild failed to produce an RPM package." >&2

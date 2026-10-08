@@ -11,11 +11,11 @@
 #   ./scripts/deliver_macos.sh [options]
 #
 # Options:
-#   --pkg <file>            Path to .pkg file (auto-detects edirstat-appstore-*.pkg if omitted)
+#   --pkg <file>            Path to .pkg file (auto-detects weshtatistic-appstore-*.pkg if omitted)
 #   --key-id <id>           App Store Connect API Key ID (or $APPLE_API_KEY_ID)
 #   --issuer-id <uuid>      App Store Connect Issuer ID (or $APPLE_API_ISSUER)
 #   --api-key <val>         Private key .p8 path, raw PEM string, or base64 (or $APPLE_API_KEY)
-#   --bundle-id <id>        Bundle ID (default: com.edirstat.app)
+#   --bundle-id <id>        Bundle ID (default: com.weshtatistic.app)
 #   --build-number <num>    Override build number (CFBundleVersion)
 #   --version <ver>         Override release version (CFBundleShortVersionString)
 #   --skip-submit           Upload to App Store Connect only (do not submit for review)
@@ -49,7 +49,7 @@ PKG_PATH=""
 KEY_ID="${APPLE_API_KEY_ID:-}"
 ISSUER_ID="${APPLE_API_ISSUER:-}"
 API_KEY_RAW="${APPLE_API_KEY:-}"
-BUNDLE_ID="com.edirstat.app"
+BUNDLE_ID="com.weshtatistic.app"
 BUILD_NUMBER=""
 APP_VERSION=""
 SKIP_SUBMIT=0
@@ -89,7 +89,7 @@ done
 # ---------- Auto-detect .pkg if not specified ----------
 if [[ -z "$PKG_PATH" && "$SUBMIT_ONLY" -eq 0 ]]; then
   # Look in repo root and staging dirs
-  PKG_PATH="$(find . -maxdepth 2 -type f -name "edirstat-appstore-*.pkg" 2>/dev/null | sort -V | tail -1 || true)"
+  PKG_PATH="$(find . -maxdepth 2 -type f -name "weshtatistic-appstore-*.pkg" 2>/dev/null | sort -V | tail -1 || true)"
   if [[ -z "$PKG_PATH" ]]; then
     PKG_PATH="$(find . -maxdepth 2 -type f -name "*.pkg" 2>/dev/null | sort -V | tail -1 || true)"
   fi
@@ -148,7 +148,7 @@ if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
 fi
 
 # ---------- Setup Ephemeral Private Key Storage with Trap Cleanup ----------
-TMP_KEY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/edirstat_deliver.XXXXXX")"
+TMP_KEY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/weshtatistic_deliver.XXXXXX")"
 chmod 700 "$TMP_KEY_DIR"
 KEY_FILE="$TMP_KEY_DIR/AuthKey_${KEY_ID}.p8"
 
@@ -346,7 +346,7 @@ def api_request(method: str, path: str, data: dict = None) -> dict:
         "Authorization": f"Bearer {generate_jwt()}",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "User-Agent": "eDirStat-Delivery/2.2.0"
+        "User-Agent": "weshtatistic-Delivery/2.2.0"
     }
     body = json.dumps(data).encode("utf-8") if data else None
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
@@ -538,7 +538,7 @@ submit_payload = {
 }
 api_request("PATCH", f"/v1/reviewSubmissions/{review_sub_id}", submit_payload)
 
-print(f"\n🎉 Successfully submitted eDirStat {app_version} (Build {build_number}) to Apple for App Review!")
+print(f"\n🎉 Successfully submitted weshtatistic {app_version} (Build {build_number}) to Apple for App Review!")
 PY_SCRIPT
 
 echo "==> Deliver macOS App Store completed successfully."

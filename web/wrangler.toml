@@ -1,4 +1,4 @@
-name = "cn-edirstat"
+name = "cn-weshtatistic"
 compatibility_date = "2026-09-10"
 
 # Disable public workers.dev URL
@@ -13,7 +13,7 @@ not_found_handling = "404-page"
 
 # --- Production (main branch) ---
 [env.prod]
-name = "cn-edirstat"
+name = "cn-weshtatistic"
 
 [[env.prod.routes]]
 pattern = "edirstat.com"
@@ -25,7 +25,7 @@ custom_domain = true
 
 # --- Dev (dev branch) ---
 [env.dev]
-name = "cn-edirstat-dev"
+name = "cn-weshtatistic-dev"
 
 [[env.dev.routes]]
 pattern = "dev.edirstat.com"

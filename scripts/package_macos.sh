@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# package_macos.sh — build, bundle, sign, and package eDirStat for macOS.
+# package_macos.sh — build, bundle, sign, and package weshtatistic for macOS.
 #
 # Channels:
-#   (default) / --devid  Developer ID → notarize → .dmg & .zip (itch.io / direct download, unsandboxed)
+#   (default) / --devid  Developer ID → notarize → .dmg & .zip (GitHub Releases / direct distribution, unsandboxed)
 #   --skip-notarize      Developer ID, sign only          (quick local iteration)
 #   --ad-hoc / --unsigned Ad-hoc sign (-), skip notary    (dev / CI without secrets)
 #   --appstore           App Store / TestFlight → .pkg    (sandboxed, signed for Transporter)
 #   --validate [path]    Pre-flight validation on bundle/package/dmg (or test an existing target)
 #
 # Examples:
-#   ./scripts/package_macos.sh                          # production itch.io release build
+#   ./scripts/package_macos.sh                          # production GitHub Releases build
 #   ./scripts/package_macos.sh --skip-notarize          # local signed test (skip notarize wait)
 #   ./scripts/package_macos.sh --ad-hoc                 # local dev or CI build (no secrets needed)
 #   ./scripts/package_macos.sh --appstore --build 3     # Mac App Store upload (.pkg)
 #   ./scripts/package_macos.sh --appstore --profile <path> # specify custom provisioning profile
 #   ./scripts/package_macos.sh --appstore --validate    # build App Store .pkg and run validation
-#   ./scripts/package_macos.sh --validate staging/eDirStat.app # validate existing .app bundle
+#   ./scripts/package_macos.sh --validate staging/weshtatistic.app # validate existing .app bundle
 #
 # One-time prereqs:
 #   xcode-select --install
@@ -34,11 +34,11 @@ fi
 cd "$REPO_ROOT"
 
 # ---------- Config (override via environment) ----------
-APP_NAME="eDirStat"
-BINARY_NAME="edirstat"
-BUNDLE_ID="com.edirstat.app"
+APP_NAME="weshtatistic"
+BINARY_NAME="weshtatistic"
+BUNDLE_ID="com.weshtatistic.app"
 TEAM_ID="B2QGXRL5VZ"
-ICON_SOURCE="crates/edirstat/assets/img/icon_512x.png"   # largest master available
+ICON_SOURCE="crates/weshtatistic/assets/img/icon_512x.png"   # largest master available
 CATEGORY="public.app-category.utilities"
 TARGET="aarch64-apple-darwin"
 NOTARY_PROFILE="${NOTARY_PROFILE:-notary}"
@@ -85,7 +85,7 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [options]"
       echo "Options:"
       echo "  --target <triple>     Target triple (default: aarch64-apple-darwin)"
-      echo "  --devid               Developer ID channel (itch.io/direct, unsandboxed, notarized) [default]"
+      echo "  --devid               Developer ID channel (GitHub Releases/direct, unsandboxed, notarized) [default]"
       echo "  --appstore            Mac App Store channel (sandboxed, signed .pkg, no default features)"
       echo "  --ad-hoc, --unsigned  Ad-hoc sign (-), skip notarization (for local dev / CI)"
       echo "  --skip-notarize       Sign with Developer ID, skip notarytool"
@@ -411,14 +411,14 @@ EOF
   echo "==> Installer ident:  $INSTALLER_IDENTITY"
   echo "==> Entitlements:     $ENTITLEMENTS"
 else
-  # Default: Developer ID (unsandboxed for itch.io / direct download)
+  # Default: Developer ID (unsandboxed for GitHub Releases / direct distribution)
   CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-$(find_identity "Developer ID Application" "-p codesigning")}"
   [[ -n "$CODESIGN_IDENTITY" ]] || {
     echo "ERROR: no 'Developer ID Application' identity found in keychain." >&2
     echo "       Pass --ad-hoc for local development / CI builds without certificates." >&2
     exit 1
   }
-  echo "==> Mode:             Developer ID / itch.io (unsandboxed)"
+  echo "==> Mode:             Developer ID / GitHub Releases (unsandboxed)"
   echo "==> Signing identity: $CODESIGN_IDENTITY"
 fi
 
@@ -428,8 +428,8 @@ echo "==> Target:           $TARGET (min macOS $MIN_MACOS)"
 CARGO_BUILD_ARGS=(-p "$BINARY_NAME")
 if [[ "$MODE" == "appstore" ]]; then
   echo "==> Configuring build for Mac App Store (sandboxed)"
-  export EDIRSTAT_MACOS_APPSTORE=1
-  export EDIRSTAT_APP_SANDBOX=1
+  export WESHTATISTIC_MACOS_APPSTORE=1
+  export WESHTATISTIC_APP_SANDBOX=1
   NO_DEFAULT_FEATURES=1
 fi
 

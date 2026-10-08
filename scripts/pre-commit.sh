@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Git pre-commit hook for eDirStat.
+# Git pre-commit hook for weshtatistic.
 # Delegates to scripts/check.sh to ensure local commits pass all CI quality gates.
 set -euo pipefail
 

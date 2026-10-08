@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# package_deb.sh — Build a Debian / Ubuntu (.deb) package for eDirStat.
+# package_deb.sh — Build a Debian / Ubuntu (.deb) package for weshtatistic.
 #
 # Usage:
 #   ./scripts/package_deb.sh [options]
 #
 # Options:
-#   --binary <path>     Path to compiled binary (defaults to target/.../edirstat_multivers or target/release/edirstat)
+#   --binary <path>     Path to compiled binary (defaults to target/.../weshtatistic_multivers or target/release/weshtatistic)
 #   --version <ver>     Package version (auto-detected from Cargo.toml if omitted)
 #   --build-num <num>   Debian package revision (default: 1)
 #   --arch <arch>       Target architecture (default: amd64)
@@ -13,7 +13,7 @@
 #   -h, --help          Show this help message
 #
 # Artifacts produced:
-#   <out-dir>/edirstat_<version>-<build-num>_<arch>.deb
+#   <out-dir>/weshtatistic_<version>-<build-num>_<arch>.deb
 
 set -euo pipefail
 
@@ -64,9 +64,9 @@ fi
 # ---------- Resolve Binary ----------
 if [[ -z "$BINARY_PATH" ]]; then
   CANDIDATES=(
-    "target/x86_64-unknown-linux-gnu/release/edirstat_multivers"
-    "target/release/edirstat"
-    "target/x86_64-unknown-linux-gnu/release/edirstat"
+    "target/x86_64-unknown-linux-gnu/release/weshtatistic_multivers"
+    "target/release/weshtatistic"
+    "target/x86_64-unknown-linux-gnu/release/weshtatistic"
   )
   for c in "${CANDIDATES[@]}"; do
     if [[ -f "$c" ]]; then
@@ -81,7 +81,7 @@ if [[ -z "$BINARY_PATH" || ! -f "$BINARY_PATH" ]]; then
   exit 1
 fi
 
-echo "==> Packaging eDirStat for Debian / Ubuntu"
+echo "==> Packaging weshtatistic for Debian / Ubuntu"
 echo "  • Version:      $VERSION-$BUILD_NUM"
 echo "  • Architecture: $ARCH"
 echo "  • Source binary: $BINARY_PATH"
@@ -90,7 +90,7 @@ echo "  • Output dir:   $OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 # ---------- Stage Payload Directory ----------
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/edirstat_deb_pkg.XXXXXX")"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/weshtatistic_deb_pkg.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 PKG_ROOT="$TMP_DIR/root"
@@ -98,25 +98,25 @@ mkdir -p \
   "$PKG_ROOT/usr/bin" \
   "$PKG_ROOT/usr/share/applications" \
   "$PKG_ROOT/usr/share/icons/hicolor/scalable/apps" \
-  "$PKG_ROOT/usr/share/doc/edirstat" \
+  "$PKG_ROOT/usr/share/doc/weshtatistic" \
   "$PKG_ROOT/DEBIAN"
 
 # 1. Binary
-install -m 755 "$BINARY_PATH" "$PKG_ROOT/usr/bin/edirstat"
+install -m 755 "$BINARY_PATH" "$PKG_ROOT/usr/bin/weshtatistic"
 
 # 2. Desktop Entry
-DESKTOP_SRC="assets/linux/edirstat.desktop"
+DESKTOP_SRC="assets/linux/weshtatistic.desktop"
 if [[ -f "$DESKTOP_SRC" ]]; then
-  install -m 644 "$DESKTOP_SRC" "$PKG_ROOT/usr/share/applications/edirstat.desktop"
+  install -m 644 "$DESKTOP_SRC" "$PKG_ROOT/usr/share/applications/weshtatistic.desktop"
 else
-  cat > "$PKG_ROOT/usr/share/applications/edirstat.desktop" <<'EOF'
+  cat > "$PKG_ROOT/usr/share/applications/weshtatistic.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=eDirStat
+Name=weshtatistic
 Comment=Fast, interactive graphical disk usage analyzer & deduplication engine
 GenericName=Disk Usage Analyzer
-Exec=edirstat %U
-Icon=edirstat
+Exec=weshtatistic %U
+Icon=weshtatistic
 Terminal=false
 StartupNotify=true
 Categories=System;Filesystem;Utility;
@@ -131,7 +131,7 @@ for size in 16 32 48 64 128 256 512; do
   if [[ -f "$icon_src" ]]; then
     dest_dir="$PKG_ROOT/usr/share/icons/hicolor/${size}x${size}/apps"
     mkdir -p "$dest_dir"
-    install -m 644 "$icon_src" "$dest_dir/edirstat.png"
+    install -m 644 "$icon_src" "$dest_dir/weshtatistic.png"
   fi
 done
 
@@ -140,15 +140,15 @@ if [[ ! -f "$SVG_SRC" ]]; then
   SVG_SRC="assets/img/icon.svg"
 fi
 if [[ -f "$SVG_SRC" ]]; then
-  install -m 644 "$SVG_SRC" "$PKG_ROOT/usr/share/icons/hicolor/scalable/apps/edirstat.svg"
+  install -m 644 "$SVG_SRC" "$PKG_ROOT/usr/share/icons/hicolor/scalable/apps/weshtatistic.svg"
 fi
 
 # 4. Documentation & Licenses
 if [[ -f "LICENSE" ]]; then
-  install -m 644 "LICENSE" "$PKG_ROOT/usr/share/doc/edirstat/copyright"
+  install -m 644 "LICENSE" "$PKG_ROOT/usr/share/doc/weshtatistic/copyright"
 fi
 if [[ -f "README.md" ]]; then
-  install -m 644 "README.md" "$PKG_ROOT/usr/share/doc/edirstat/README.md"
+  install -m 644 "README.md" "$PKG_ROOT/usr/share/doc/weshtatistic/README.md"
 fi
 
 # 5. Compute Installed-Size in KB
@@ -156,7 +156,7 @@ INSTALLED_SIZE="$(du -sk "$PKG_ROOT/usr" | cut -f1)"
 
 # 6. Generate DEBIAN/control
 cat > "$PKG_ROOT/DEBIAN/control" <<EOF
-Package: edirstat
+Package: weshtatistic
 Version: ${VERSION}-${BUILD_NUM}
 Section: utils
 Priority: optional
@@ -165,15 +165,15 @@ Maintainer: Cody Wyatt Neiman (xangelix) <neiman@cody.to>
 Installed-Size: ${INSTALLED_SIZE}
 Depends: libc6 (>= 2.31), libxkbcommon0, libfontconfig1
 Recommends: libwayland-client0, libx11-6
-Homepage: https://edirstat.com
+Homepage: https://weshtatistic.com
 Description: Fast, cross-platform disk usage analyzer and deduplication engine
- eDirStat is a modern disk usage analyzer in Rust (WinDirStat/KDirStat-inspired),
+ weshtatistic is a modern disk usage analyzer in Rust (WinDirStat/KDirStat-inspired),
  featuring a work-stealing parallel scanner, zero-copy arena data model,
  zstd-compressed snapshots, an interactive egui treemap GUI, an NTFS \$MFT
  parser, and a 7-stage BLAKE3 deduplication engine.
 EOF
 
-OUT_FILE="$OUT_DIR/edirstat_${VERSION}-${BUILD_NUM}_${ARCH}.deb"
+OUT_FILE="$OUT_DIR/weshtatistic_${VERSION}-${BUILD_NUM}_${ARCH}.deb"
 rm -f "$OUT_FILE"
 
 # ---------- Build .deb Archive ----------

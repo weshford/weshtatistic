@@ -2,7 +2,7 @@
 
 {% block title %}{{ page.title }} — {{ config.title }}{% endblock title %}
 {% block description %}{{ page.description }}{% endblock description %}
-{% block keywords %}{{ page.extra.version | default(value="") }} release notes, edirstat changelog, disk usage analyzer, windirstat alternative, macos disk analyzer, linux disk usage, duplicate file finder, treemap zoom, rust disk analyzer{% endblock keywords %}
+{% block keywords %}{{ page.extra.version | default(value="") }} release notes, weshtatistic changelog, disk usage analyzer, windirstat alternative, macos disk analyzer, linux disk usage, duplicate file finder, treemap zoom, rust disk analyzer{% endblock keywords %}
 
 {% block og_tags %}
 <meta property="og:type" content="article">
@@ -107,7 +107,7 @@
 <header class="header">
     <div class="header-container">
         <a href="/" class="logo">
-            <img src="{{ get_url(path="assets/logo-nosubtext-transparent.svg") | safe }}" alt="eDirStat Logo" class="logo-img" width="160" height="40">
+            <img src="{{ get_url(path="assets/logo-nosubtext-transparent.svg") | safe }}" alt="weshtatistic Logo" class="logo-img" width="160" height="40">
         </a>
         <nav class="nav">
             <a href="/#features" class="nav-link">Features</a>
@@ -157,7 +157,7 @@
             </a>
             <a href="/#download" class="btn btn-primary btn-glow mobile-action-btn">
                 <i data-lucide="download"></i>
-                <span>Download eDirStat</span>
+                <span>Download weshtatistic</span>
             </a>
         </div>
     </div>
@@ -211,7 +211,7 @@
 
             <!-- Related Features & Resources (Internal SEO Linking) -->
             <div class="article-resources">
-                <h3 class="resources-title">Explore eDirStat Features &amp; Tools</h3>
+                <h3 class="resources-title">Explore weshtatistic Features &amp; Tools</h3>
                 <div class="resources-grid">
                     <a href="/#simulator" class="resource-card glass-card">
                         <i data-lucide="pie-chart" class="resource-icon"></i>
@@ -238,7 +238,7 @@
                         <i data-lucide="copy" class="resource-icon"></i>
                         <div class="resource-info">
                             <span class="resource-name">7-Stage Deduplication</span>
-                            <span class="resource-desc">Learn how eDirStat identifies duplicate files with zero memory copies.</span>
+                            <span class="resource-desc">Learn how weshtatistic identifies duplicate files with zero memory copies.</span>
                         </div>
                     </a>
                 </div>
@@ -249,13 +249,13 @@
             <!-- Article Footer CTA -->
             <div class="article-cta">
                 <div class="article-cta-content">
-                    <h3>Get eDirStat v{{ page.extra.version | default(value=config.extra.version) }}</h3>
-                    <p>Official pre-compiled binaries are available exclusively on itch.io, funding open-source development.</p>
+                    <h3>Get weshtatistic v{{ page.extra.version | default(value=config.extra.version) }}</h3>
+                    <p>Free release binaries are available as GitHub Release assets for Windows, macOS, and Linux.</p>
                 </div>
                 <div class="article-cta-actions">
-                    <a href="{{ config.extra.itch_io_url }}" target="_blank" class="btn btn-primary btn-glow">
+                    <a href="{{ config.extra.github_releases_url }}" target="_blank" class="btn btn-primary btn-glow">
                         <i data-lucide="download"></i>
-                        <span>Get on itch.io</span>
+                        <span>GitHub Releases</span>
                     </a>
                     <a href="{{ config.extra.github_url }}" target="_blank" class="btn btn-secondary">
                         <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path><path d="M9 18c-4.51 2-5-2-7-2"></path></svg>
@@ -303,7 +303,7 @@
     <div class="footer-container">
         <div class="footer-left">
             <div class="logo">
-                <img src="{{ get_url(path="assets/logo-nosubtext-transparent.svg") | safe }}" alt="eDirStat Logo" class="logo-img" width="160" height="40">
+                <img src="{{ get_url(path="assets/logo-nosubtext-transparent.svg") | safe }}" alt="weshtatistic Logo" class="logo-img" width="160" height="40">
             </div>
             <p class="footer-desc">Fast, modern disk usage analyzer built in safe, native Rust.</p>
         </div>
@@ -313,8 +313,8 @@
                 <a href="{{ config.extra.github_url }}" target="_blank" class="footer-link">
                     <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 4px;"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path><path d="M9 18c-4.51 2-5-2-7-2"></path></svg> GitHub
                 </a>
-                <a href="{{ config.extra.itch_io_url }}" target="_blank" class="footer-link">
-                    <i data-lucide="download"></i> itch.io
+                <a href="{{ config.extra.github_releases_url }}" target="_blank" class="footer-link">
+                    <i data-lucide="download"></i> GitHub Releases
                 </a>
                 <a href="{{ config.extra.github_url }}/blob/main/LICENSE" target="_blank" class="footer-link">
                     Licensed under {{ config.extra.license }}
@@ -323,8 +323,8 @@
         </div>
     </div>
     <div class="footer-bottom">
-        <p>&copy; 2026 eDirStat. Released under the MIT License.</p>
-        <p class="trademark-disclaimer" style="opacity: 0.5; font-size: 0.8rem; margin-top: 8px;">WinDirStat, WizTree, and QDirStat are trademarks of their respective owners. eDirStat is an independent open-source project and is not affiliated with, sponsored by, or endorsed by the trademark holders.</p>
+        <p>&copy; 2026 weshtatistic. Released under the MIT License.</p>
+        <p class="trademark-disclaimer" style="opacity: 0.5; font-size: 0.8rem; margin-top: 8px;">WinDirStat, WizTree, and QDirStat are trademarks of their respective owners. weshtatistic is an independent open-source project and is not affiliated with, sponsored by, or endorsed by the trademark holders.</p>
     </div>
 </footer>
 {% endblock content %}

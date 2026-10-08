@@ -7,7 +7,7 @@ Workflow:
   2. Run `./scripts/sync_devlogs.py` to:
      - Automatically compile clean HTML devlogs into `web/itch/devlog/vX.Y.Z.html` for itch.io.
      - Keep `web/content/blog/` synchronized with `CHANGELOG.md`.
-     - Prepare posts for Zola static site generation on `edirstat.com/blog/`.
+     - Prepare posts for Zola static site generation on `weshtatistic.com/blog/`.
 
 Usage:
   ./scripts/sync_devlogs.py               # Sync both directions (default)
@@ -32,10 +32,10 @@ ITCH_DIR = REPO_ROOT / "web" / "itch" / "devlog"
 WEB_DIR = REPO_ROOT / "web"
 
 RELEASE_TITLES = {
-    "2.2.0": "eDirStat v2.2.0 — Treemap Zoom, 18 Languages & Mac App Store Release",
-    "2.1.0": "eDirStat v2.1.0 — 8 Languages, Themes, Web Snapshot Viewer & Linux MFT",
-    "2.0.1": "eDirStat v2.0.1 — Snapshot Status Bar & Target-CPU Optimizations",
-    "2.0.0": "eDirStat v2.0.0 — Major 2.0 Overhaul, Direct MFT & Classic Layout",
+    "2.2.0": "weshtatistic v2.2.0 — Treemap Zoom, 18 Languages & Mac App Store Release",
+    "2.1.0": "weshtatistic v2.1.0 — 8 Languages, Themes, Web Snapshot Viewer & Linux MFT",
+    "2.0.1": "weshtatistic v2.0.1 — Snapshot Status Bar & Target-CPU Optimizations",
+    "2.0.0": "weshtatistic v2.0.0 — Major 2.0 Overhaul, Direct MFT & Classic Layout",
 }
 
 
@@ -75,9 +75,9 @@ def parse_changelog(changelog_path: Path):
             if candidate_lines:
                 desc = " ".join(candidate_lines)
             else:
-                desc = f"eDirStat {ver} release notes, improvements, and updates."
+                desc = f"weshtatistic {ver} release notes, improvements, and updates."
 
-        title = RELEASE_TITLES.get(ver, f"eDirStat v{ver} Release Notes")
+        title = RELEASE_TITLES.get(ver, f"weshtatistic v{ver} Release Notes")
 
         releases.append({
             "version": ver,
@@ -131,7 +131,7 @@ def convert_markdown_to_itch_html(md_text: str) -> str:
     # Format tweaks for itch.io aesthetic:
     # Ensure paragraphs, blockquotes, and lists render cleanly
     html = re.sub(r">\s*\n", "> ", html)
-    footer = '<p>🌐 <em>Visit the official website and launch the interactive web viewer at <a href="https://edirstat.com" target="_blank">edirstat.com</a></em></p>'
+    footer = '<p>🌐 <em>Visit the official website and launch the interactive web viewer at <a href="https://weshtatistic.com" target="_blank">weshtatistic.com</a></em></p>'
     return html.strip() + "\n" + footer + "\n"
 
 

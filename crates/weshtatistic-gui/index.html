@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101014" />
+    <meta
+      name="description"
+      content="Free online disk usage viewer: open an weshtatistic .edst snapshot in your browser and explore interactive treemaps, charts, and duplicate file reports — no installation required."
+    />
+    <title>weshtatistic — Web Snapshot Viewer</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #101014;
+        overscroll-behavior: none;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      #loading_text {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #9ca3af;
+        font-family: system-ui, sans-serif;
+        font-size: 14px;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="weshtatistic_canvas"></canvas>
+    <div id="loading_text">Loading weshtatistic…</div>
+    <!-- JS glue emitted by `wasm-bindgen --target web` (see scripts/build_web.sh) -->
+    <script type="module">
+      import init, { load_snapshot_from_js } from "./weshtatistic-web.js";
+      init().then(async () => {
+        // 1. Get window search parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        let snapshotUrl = null;
+        if (urlParams.get("snapshot")) {
+          snapshotUrl = urlParams.get("snapshot");
+        } else if (urlParams.get("demo") === "true") {
+          snapshotUrl = "/MGS3.edst.zst";
+        }
+
+        // 2. Check session / local storage for url
+        if (!snapshotUrl) {
+          snapshotUrl = sessionStorage.getItem("weshtatistic_snapshot_url") || localStorage.getItem("weshtatistic_snapshot_url");
+        }
+
+        // 3. Try raw bytes from session / local storage (base64 encoded)
+        let snapshotBytes = null;
+        let snapshotName = "snapshot.edst.zst";
+        if (!snapshotUrl) {
+          const base64Bytes = sessionStorage.getItem("weshtatistic_snapshot_bytes") || localStorage.getItem("weshtatistic_snapshot_bytes");
+          if (base64Bytes) {
+            try {
+              const binaryString = atob(base64Bytes);
+              const len = binaryString.length;
+              const bytes = new Uint8Array(len);
+              for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+              }
+              snapshotBytes = bytes;
+              snapshotName = "storage_snapshot.edst.zst";
+            } catch (e) {
+              console.error("Failed to decode base64 snapshot bytes:", e);
+            }
+          }
+        }
+
+        // 4. Load the snapshot if we found one
+        if (snapshotUrl) {
+          try {
+            const response = await fetch(snapshotUrl);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const arrayBuffer = await response.arrayBuffer();
+            const bytes = new Uint8Array(arrayBuffer);
+            const name = snapshotUrl.split('/').pop() || "snapshot.edst.zst";
+            load_snapshot_from_js(bytes, name);
+          } catch (e) {
+            console.error(`Failed to fetch default snapshot from URL ${snapshotUrl}:`, e);
+          }
+        } else if (snapshotBytes) {
+          load_snapshot_from_js(snapshotBytes, snapshotName);
+        }
+      });
+    </script>
+  </body>
+</html>
