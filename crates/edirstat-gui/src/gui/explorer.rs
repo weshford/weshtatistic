@@ -715,8 +715,27 @@ impl GuiApp {
         // so the row hitbox below can carve out just the arrow (egui gives the
         // click to the last-registered overlapping widget, so overlap is fatal).
         let mut arrow_rect = None;
+        let row_rect = egui::Rect::from_min_size(
+            ui.cursor().min,
+            egui::vec2(ui.available_width(), 28.0),
+        );
+        let is_hovered = !is_selected && ui.rect_contains_pointer(row_rect);
 
-        let horizontal_res = ui.horizontal(|ui| {
+        let fill_color = match get_current_theme() {
+            AppTheme::HighContrast if is_selected => egui::Color32::from_rgb(80, 80, 0),
+            AppTheme::Light if is_selected => egui::Color32::from_rgb(204, 229, 255),
+            AppTheme::Dark if is_selected => ui.visuals().selection.bg_fill.linear_multiply(0.12),
+            AppTheme::HighContrast if is_hovered => egui::Color32::from_rgb(65, 65, 65),
+            AppTheme::Light if is_hovered => egui::Color32::from_rgb(225, 238, 254),
+            AppTheme::Dark if is_hovered => ui.visuals().widgets.hovered.bg_fill.linear_multiply(0.04),
+            _ => egui::Color32::TRANSPARENT,
+        };
+        let horizontal_res = egui::Frame::new()
+            .fill(fill_color)
+            .corner_radius(4.0)
+            .inner_margin(egui::Margin::ZERO)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
             // Indent padding
             #[allow(clippy::cast_precision_loss)]
             ui.add_space(indent_level as f32 * 22.0);
@@ -818,10 +837,11 @@ impl GuiApp {
                         .to_string(),
                 );
             });
-        });
+                })
+            });
 
         // Get the bounding box of the whole row
-        let rect = horizontal_res.response.rect;
+        let rect = horizontal_res.inner.response.rect;
 
         // Carve out only the expand arrow's hit zone from the row hitbox; the
         // indent strip left of it gets its own interact zone so clicks there
@@ -843,30 +863,12 @@ impl GuiApp {
         let strip_response = strip_rect
             .map(|strip| ui.interact(strip, row_id.with("indent_strip"), egui::Sense::click()));
 
-        let hovered =
-            response.hovered() || strip_response.as_ref().is_some_and(egui::Response::hovered);
         let clicked =
             response.clicked() || strip_response.as_ref().is_some_and(egui::Response::clicked);
         let secondary_clicked = response.secondary_clicked()
             || strip_response
                 .as_ref()
                 .is_some_and(egui::Response::secondary_clicked);
-
-        if is_selected {
-            let fill_color = match get_current_theme() {
-                AppTheme::HighContrast => egui::Color32::from_rgb(80, 80, 0),
-                AppTheme::Light => egui::Color32::from_rgb(204, 229, 255),
-                AppTheme::Dark => ui.visuals().selection.bg_fill.linear_multiply(0.12),
-            };
-            ui.painter().rect_filled(rect, 4.0, fill_color);
-        } else if hovered {
-            let hover_color = match get_current_theme() {
-                AppTheme::HighContrast => egui::Color32::from_rgb(65, 65, 65),
-                AppTheme::Light => egui::Color32::from_rgb(225, 238, 254),
-                AppTheme::Dark => ui.visuals().widgets.hovered.bg_fill.linear_multiply(0.04),
-            };
-            ui.painter().rect_filled(rect, 4.0, hover_color);
-        }
 
         let double_clicked = response.double_clicked()
             || strip_response
