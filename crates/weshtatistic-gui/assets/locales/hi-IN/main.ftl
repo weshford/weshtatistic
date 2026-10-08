@@ -306,7 +306,7 @@ modal-elevation-relaunch-btn = 🛡 एडमिन के रूप में �
 
 # About Modal
 modal-about-title = ℹ weshtatistic के बारे में
-modal-about-author = लेखक: Cody Wyatt Neiman (xangelix) <neiman@cody.to>
+modal-about-author = लेखक: weshford
 modal-about-license-btn = 📜 लाइसेंस (MIT)
 modal-about-desc1 = Rust में निर्मित एक उच्च-प्रदर्शन डिस्क स्पेस विश्लेषक और डुप्लिकेशन टूलकिट।
 modal-about-desc2 = इसमें समानांतर, वर्क-स्टीलिंग निर्देशिका ट्रैवर्सल, ज़ीरो-पार्सिंग लेआउट डीसीरियलाइज़ेशन वाले संपीड़ित स्नैपशॉट, और प्रतिक्रियाशील, इंटरैक्टिव ट्रीमैप शामिल हैं।

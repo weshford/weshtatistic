@@ -311,7 +311,7 @@ modal-elevation-relaunch-btn = 🛡 Uruchom jako administrator
 
 # About Modal
 modal-about-title = ℹ O programie weshtatistic
-modal-about-author = Autor: Cody Wyatt Neiman (xangelix) <neiman@cody.to>
+modal-about-author = Autor: weshford
 modal-about-license-btn = 📜 Licencja (MIT)
 modal-about-desc1 = Wydajne narzędzie do analizy przestrzeni dyskowej i deduplikacji napisane w języku Rust.
 modal-about-desc2 = Posiada równoległe przeszukiwanie katalogów metodą work-stealing, kompresowane migawki z deserializacją układu bez konieczności parsowania oraz interaktywne i płynne mapy drzewa.

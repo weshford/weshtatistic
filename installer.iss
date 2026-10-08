@@ -2,7 +2,7 @@
 AppId={{019EB36D-2D44-7A10-A0D3-1DA29AA7865C}}
 AppName=weshtatistic
 AppVersion={#AppVersion}
-AppPublisher=Cody Wyatt Neiman (xangelix)
+AppPublisher=weshford
 AppPublisherURL=https://github.com/weshford/weshtatistic
 AppSupportURL=https://github.com/weshford/weshtatistic/issues
 AppUpdatesURL=https://github.com/weshford/weshtatistic/releases

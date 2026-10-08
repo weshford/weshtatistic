@@ -327,7 +327,7 @@ modal-elevation-relaunch-btn = 🛡 إعادة التشغيل كمسؤول
 
 # About Modal
 modal-about-title = ℹ حول weshtatistic
-modal-about-author = تأليف: Cody Wyatt Neiman (xangelix) <neiman@cody.to>
+modal-about-author = تأليف: weshford
 modal-about-license-btn = 📜 الترخيص (MIT)
 modal-about-desc1 = أداة عالية الأداء لتحليل مساحة القرص وإزالة التكرارات، مبنية بلغة Rust.
 modal-about-desc2 = تتميز باجتياز متوازٍ للمجلدات بمبدأ «سرقة المهام»، ولقطات مضغوطة مع إلغاء تسلسل التخطيط دون تحليل، وخرائط شجرية تفاعلية سريعة الاستجابة.

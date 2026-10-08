@@ -300,7 +300,7 @@ modal-elevation-relaunch-btn = 🛡 관리자로 다시 시작
 
 # About Modal
 modal-about-title = ℹ weshtatistic 정보
-modal-about-author = By: Cody Wyatt Neiman (xangelix) <neiman@cody.to>
+modal-about-author = By: weshford
 modal-about-license-btn = 📜 라이선스 (MIT)
 modal-about-desc1 = Rust로 만든 고성능 디스크 공간 분석 및 중복 제거 도구 모음입니다.
 modal-about-desc2 = 병렬 작업 가로채기 디렉터리 탐색, 파싱 없는 레이아웃 역직렬화를 사용하는 압축 스냅샷, 빠르게 반응하는 대화형 트리맵을 제공합니다.

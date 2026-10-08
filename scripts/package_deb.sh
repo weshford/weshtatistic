@@ -161,7 +161,7 @@ Version: ${VERSION}-${BUILD_NUM}
 Section: utils
 Priority: optional
 Architecture: ${ARCH}
-Maintainer: Cody Wyatt Neiman (xangelix) <neiman@cody.to>
+Maintainer: weshford <weshford@users.noreply.github.com>
 Installed-Size: ${INSTALLED_SIZE}
 Depends: libc6 (>= 2.31), libxkbcommon0, libfontconfig1
 Recommends: libwayland-client0, libx11-6

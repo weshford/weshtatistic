@@ -81,6 +81,33 @@
         };
       });
 
+      devShells = forAllSystems (pkgs: {
+        default = pkgs.mkShell {
+          packages = with pkgs; [
+            rustc
+            cargo
+            rustfmt
+            clippy
+            rust-analyzer
+            pkg-config
+          ];
+
+          buildInputs = with pkgs; [
+            libxkbcommon
+            wayland
+            libX11
+            libXcursor
+            libXi
+            libXrandr
+            libXinerama
+            libxcb
+            libglvnd
+            mesa
+            vulkan-loader
+          ];
+        };
+      });
+
       apps = forAllSystems (pkgs: {
         default = {
           type = "app";

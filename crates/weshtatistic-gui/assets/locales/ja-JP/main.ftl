@@ -300,7 +300,7 @@ modal-elevation-relaunch-btn = 🛡 管理者として再起動
 
 # About Modal
 modal-about-title = ℹ weshtatistic のバージョン情報
-modal-about-author = By: Cody Wyatt Neiman (xangelix) <neiman@cody.to>
+modal-about-author = By: weshford
 modal-about-license-btn = 📜 ライセンス (MIT)
 modal-about-desc1 = Rust で構築された高性能なディスク容量アナライザーおよび重複排除ツールキット。
 modal-about-desc2 = ワークスティーリング方式の並列ディレクトリ走査、ゼロ解析レイアウトデシリアライズによる圧縮スナップショット、応答性の高いインタラクティブなツリーマップを備えています。

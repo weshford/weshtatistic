@@ -301,7 +301,7 @@ modal-elevation-relaunch-btn = 🛡 Yönetici olarak yeniden başlat
 
 # About Modal
 modal-about-title = ℹ weshtatistic hakkında
-modal-about-author = Geliştiren: Cody Wyatt Neiman (xangelix) <neiman@cody.to>
+modal-about-author = Geliştiren: weshford
 modal-about-license-btn = 📜 Lisans (MIT)
 modal-about-desc1 = Rust ile geliştirilmiş yüksek performanslı disk alanı analiz ve yinelenen bulma aracı.
 modal-about-desc2 = Paralel iş çalan dizin taraması, sıkıştırılmış anlık görüntüler, sıfır ayrıştırmalı yerleşim geri yükleme ve duyarlı etkileşimli treemap özelliklerini sunar.

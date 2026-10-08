@@ -7,7 +7,7 @@
     <meta name="description" content="{% block description %}{{ config.description }}{% endblock description %}">
     <!-- Meta tags -->
     <meta name="keywords" content="{% block keywords %}disk usage analyzer, windirstat alternative, wiztree alternative, qdirstat alternative, macos disk analyzer, linux disk usage, duplicate file finder, treemap disk visualization, fast disk scanner, rust disk space analyzer{% endblock keywords %}">
-    <meta name="author" content="{{ config.extra.author | default(value="xangelix") }}">
+    <meta name="author" content="{{ config.extra.author | default(value="weshford") }}">
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
     <meta name="theme-color" content="#101014">
     <link rel="canonical" href="{% block canonical %}{{ config.base_url | safe }}{{ current_path | default(value="/") | safe }}{% endblock canonical %}">
@@ -58,7 +58,7 @@
         "screenshot": "{{ config.base_url | safe }}/{{ config.extra.og_image | safe }}",
         "author": {
             "@type": "Person",
-            "name": "{{ config.extra.author | default(value="xangelix") }}",
+            "name": "{{ config.extra.author | default(value="weshford") }}",
             "url": "{{ config.extra.github_url | safe }}"
         }
     }

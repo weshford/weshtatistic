@@ -306,7 +306,7 @@ modal-elevation-relaunch-btn = 🛡 Relancer en tant qu'administrateur
 
 # About Modal
 modal-about-title = ℹ À propos de weshtatistic
-modal-about-author = Par: Cody Wyatt Neiman (xangelix) <neiman@cody.to>
+modal-about-author = Par: weshford
 modal-about-license-btn = 📜 Licence (MIT)
 modal-about-desc1 = Un outil d'analyse d'espace disque et de déduplication haute performance écrit en Rust.
 modal-about-desc2 = Offre une exploration parallèle des répertoires par vol de travail, des instantanés compressés sans analyse pour la désérialisation de la disposition, et des treemaps interactives et réactives.

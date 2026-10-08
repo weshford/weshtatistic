@@ -7,7 +7,7 @@ default-members = ["crates/weshtatistic"]
 version = "2.2.0"
 edition = "2024"
 license = "MIT"
-authors = ["Cody Wyatt Neiman (xangelix) <neiman@cody.to>"]
+authors = ["weshford"]
 repository = "https://github.com/weshford/weshtatistic"
 
 [patch.crates-io]

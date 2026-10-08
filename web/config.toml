@@ -8,7 +8,7 @@ generate_feeds = true
 feed_filenames = ["atom.xml"]
 
 [extra]
-author = "xangelix"
+author = "weshford"
 github_releases_url = "https://github.com/weshford/weshtatistic/releases"
 mac_app_store_url = "https://apps.apple.com/us/app/edirstat/id6805133585"
 github_url = "https://github.com/weshford/weshtatistic"

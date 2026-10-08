@@ -288,7 +288,7 @@ modal-elevation-relaunch-btn = 🛡 Khởi chạy lại với quyền Quản tr�
 
 # About Modal
 modal-about-title = ℹ Giới thiệu weshtatistic
-modal-about-author = Tác giả: Cody Wyatt Neiman (xangelix) <neiman@cody.to>
+modal-about-author = Tác giả: weshford
 modal-about-license-btn = 📜 Giấy phép (MIT)
 modal-about-desc1 = Công cụ phân tích dung lượng đĩa và loại bỏ trùng lặp hiệu năng cao được xây dựng bằng Rust.
 modal-about-desc2 = Có khả năng duyệt thư mục song song theo cơ chế work-stealing, bản chụp nhanh nén với giải tuần tự hóa bố cục không cần phân tích cú pháp, và các treemap tương tác, phản hồi nhanh.

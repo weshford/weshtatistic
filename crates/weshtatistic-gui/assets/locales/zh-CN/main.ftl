@@ -300,7 +300,7 @@ modal-elevation-relaunch-btn = 🛡 以管理员身份重新启动
 
 # About Modal
 modal-about-title = ℹ 关于 weshtatistic
-modal-about-author = By: Cody Wyatt Neiman (xangelix) <neiman@cody.to>
+modal-about-author = By: weshford
 modal-about-license-btn = 📜 许可证 (MIT)
 modal-about-desc1 = 一款使用 Rust 构建的高性能磁盘空间分析与去重工具包。
 modal-about-desc2 = 具备并行工作窃取式目录遍历、采用零解析布局反序列化的压缩快照，以及响应迅速的交互式矩形树图。
